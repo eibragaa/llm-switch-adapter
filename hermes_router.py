@@ -1,11 +1,12 @@
 """
 Hermes Router — Complexity-based provider routing for cost optimization.
 
-Classifies task complexity and routes to:
-  - LOW    → OpenRouter free models (qwen/qwen3-coder:free)
-  - MEDIUM → Nvidia free models (qwen3-coder, glm4, minimax)
+Classifies task complexity and routes to the cheapest available provider:
+  - LOW    → Ollama local (qwen3:4b) → OpenRouter free
+  - MEDIUM → Nvidia free (3 models) → Ollama → OpenRouter
   - HIGH   → DeepSeek paid (deepseek-v4-flash)
 
+Each tier has a prioritized pool — tries the first, falls back to next.
 Also provides cost tracking across providers.
 """
 
@@ -54,34 +55,39 @@ COMPLEXITY_RULES = {
 }
 
 
-# Provider routing table
-PROVIDER_ROUTES = {
-    "low": {
-        "provider": "openrouter",
-        "model": "qwen/qwen3-coder:free",
-        "cost_per_1k_tokens": 0,
-        "description": "OpenRouter Free",
-    },
-    "medium": {
-        "provider": "nvidia",
-        "model": "qwen/qwen3-coder-480b-a35b-instruct",
-        "cost_per_1k_tokens": 0,
-        "description": "Nvidia Free (qwen3-coder)",
-    },
-    "high": {
-        "provider": "deepseek",
-        "model": "deepseek-v4-flash",
-        "cost_per_1k_tokens": 0.00028,  # ~$0.28/M tokens
-        "description": "DeepSeek v4 Flash (paid)",
-    },
+# ── provider pools ─────────────────────────────────────────────────────
+# Each tier = list of fallbacks. First in list = preferred.
+PROVIDER_POOLS = {
+    "low": [
+        {"provider": "ollama-local", "model": "qwen3:4b",
+         "cost_per_1k_tokens": 0, "description": "Ollama Local (qwen3:4b)"},
+        {"provider": "openrouter", "model": "qwen/qwen3-coder:free",
+         "cost_per_1k_tokens": 0, "description": "OpenRouter Free"},
+    ],
+    "medium": [
+        {"provider": "nvidia", "model": "qwen/qwen3-coder-480b-a35b-instruct",
+         "cost_per_1k_tokens": 0, "description": "Nvidia Free (qwen3-coder)"},
+        {"provider": "nvidia", "model": "z-ai/glm4.7",
+         "cost_per_1k_tokens": 0, "description": "Nvidia Free (glm4.7)"},
+        {"provider": "nvidia", "model": "minimaxai/minimax-m2.7",
+         "cost_per_1k_tokens": 0, "description": "Nvidia Free (minimax-m2.7)"},
+        {"provider": "ollama-local", "model": "qwen3:4b",
+         "cost_per_1k_tokens": 0, "description": "Ollama Local (qwen3:4b)"},
+        {"provider": "openrouter", "model": "qwen/qwen3-coder:free",
+         "cost_per_1k_tokens": 0, "description": "OpenRouter Free (fallback)"},
+    ],
+    "high": [
+        {"provider": "deepseek", "model": "deepseek-v4-flash",
+         "cost_per_1k_tokens": 0.00028, "description": "DeepSeek v4 Flash (paid)"},
+        {"provider": "openrouter", "model": "qwen/qwen3-coder:free",
+         "cost_per_1k_tokens": 0, "description": "OpenRouter Free (emergency)"},
+    ],
 }
 
-# Medium fallback: if Nvidia is down, try other free models
-MEDIUM_FALLBACKS = [
-    {"provider": "nvidia", "model": "z-ai/glm4.7", "cost_per_1k_tokens": 0},
-    {"provider": "nvidia", "model": "minimaxai/minimax-m2.7", "cost_per_1k_tokens": 0},
-    {"provider": "openrouter", "model": "qwen/qwen3-coder:free", "cost_per_1k_tokens": 0},
-]
+
+def get_provider_pool(complexity: str) -> list[dict]:
+    """Get the provider pool for a given complexity tier."""
+    return PROVIDER_POOLS.get(complexity, PROVIDER_POOLS["medium"])
 
 
 def classify_complexity(prompt: str) -> str:
@@ -118,16 +124,18 @@ def classify_complexity(prompt: str) -> str:
 def route(prompt: str) -> dict:
     """Determine which provider/model to use for a given prompt.
 
-    Returns: {provider, model, complexity, cost_per_1k_tokens}
+    Returns: {provider, model, complexity, cost_per_1k_tokens, pool, description}
     """
     complexity = classify_complexity(prompt)
-    route_cfg = PROVIDER_ROUTES[complexity]
+    pool = get_provider_pool(complexity)
+    best = pool[0]
     return {
         "complexity": complexity,
-        "provider": route_cfg["provider"],
-        "model": route_cfg["model"],
-        "cost_per_1k_tokens": route_cfg["cost_per_1k_tokens"],
-        "description": route_cfg["description"],
+        "provider": best["provider"],
+        "model": best["model"],
+        "cost_per_1k_tokens": best["cost_per_1k_tokens"],
+        "description": best["description"],
+        "pool": pool,
     }
 
 
@@ -140,19 +148,50 @@ def route_execute(
 ) -> dict:
     """Route and execute a prompt through the best provider.
 
-    If provider/model are specified, they override the router.
+    Tries each provider in the pool until one succeeds (fallback chain).
+    If provider/model are specified, they override the router and no fallback.
     """
-    if not provider or not model:
-        routing = route(prompt)
-        provider = routing["provider"]
-        model = routing["model"]
-    else:
-        routing = route(prompt)  # Still classify for logging
+    if provider and model:
+        # Manual override — single attempt, no fallback
+        task_id = hashlib.md5(f"{prompt}{time.time()}".encode()).hexdigest()[:12]
+        start_time = time.time()
+        result = _try_provider(prompt, provider, model, timeout)
+        elapsed = time.time() - start_time
+        _log_cost(task_id, "manual", provider, model,
+                  result["success"], elapsed)
+        return result
 
-    task_id = hashlib.md5(f"{prompt}{time.time()}".encode()).hexdigest()[:12]
-    start_time = time.time()
+    # Auto-route — try pool in order
+    routing = route(prompt)
+    pool = routing["pool"]
+    errors = []
 
-    # Build hermes command
+    for candidate in pool:
+        task_id = hashlib.md5(f"{prompt}{time.time()}{candidate['provider']}".encode()).hexdigest()[:12]
+        start_time = time.time()
+        result = _try_provider(prompt, candidate["provider"],
+                                candidate["model"], timeout)
+        elapsed = time.time() - start_time
+        _log_cost(task_id, routing["complexity"],
+                  candidate["provider"], candidate["model"],
+                  result["success"], elapsed)
+
+        if result["success"]:
+            return result
+
+        errors.append(f"{candidate['provider']}/{candidate['model']}: {result.get('error', 'unknown')}")
+
+    return {
+        "success": False,
+        "output": "",
+        "error": f"All providers failed: {' | '.join(errors)}",
+        "complexity": routing["complexity"],
+    }
+
+
+def _try_provider(prompt: str, provider: str, model: str,
+                  timeout: int = 300) -> dict:
+    """Execute a single provider attempt."""
     cmd = [
         "hermes", "chat",
         "-q", prompt,
@@ -160,7 +199,6 @@ def route_execute(
         "-m", model,
         "--quiet",
     ]
-
     try:
         result = subprocess.run(
             cmd,
@@ -169,25 +207,26 @@ def route_execute(
             timeout=timeout,
             env={**os.environ, "HERMES_NO_COLOR": "1"},
         )
-        elapsed = time.time() - start_time
         output = result.stdout + "\n" + result.stderr
         success = result.returncode == 0
     except subprocess.TimeoutExpired:
-        elapsed = time.time() - start_time
         output = "TIMEOUT"
         success = False
-
-    # Log cost
-    _log_cost(task_id, routing["complexity"], provider, model, success, elapsed)
+    except Exception as e:
+        return {
+            "success": False,
+            "output": "",
+            "error": str(e),
+            "provider": provider,
+            "model": model,
+        }
 
     return {
-        "task_id": task_id,
-        "complexity": routing["complexity"],
+        "success": success,
+        "output": output[:2000],  # Truncate for display
+        "error": None if success else output[:500],
         "provider": provider,
         "model": model,
-        "success": success,
-        "elapsed_sec": round(elapsed, 1),
-        "output": output[:2000],  # Truncate for display
     }
 
 

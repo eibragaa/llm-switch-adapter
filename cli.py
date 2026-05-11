@@ -13,6 +13,12 @@ Usage:
     switch-adapter route exec <prompt>          Route AND execute through Hermes
     switch-adapter cost [--days N]             Show cost summary
 
+    switch-adapter provider list                List all providers in the pool
+    switch-adapter provider route <prompt>      Show route suggestion for a prompt
+
+    switch-adapter dashboard [--json]           Show live provider status + limits
+    switch-adapter dashboard watch              Live-updating dashboard (every 10s)
+
     switch-adapter test                         Run self-test
 """
 
@@ -42,6 +48,7 @@ from codex_switcher import (
     reset_exhausted,
 )
 from hermes_router import route, route_execute, get_cost_summary
+from dashboard import build_dashboard, render_dashboard, render_json
 
 
 # ── codex commands ───────────────────────────────────────────────────────
@@ -181,17 +188,19 @@ def cmd_route_exec(args):
     prompt = args.prompt
     routing = route(prompt)
 
-    print(f"\n🚀 Executing via {routing['description']}...")
-    print(f"   Model: {routing['model']}")
+    print(f"  Classified as: {routing['complexity'].upper()} → {routing['description']}")
     print()
 
     result = route_execute(prompt)
 
-    print(f"\n{'✅' if result['success'] else '❌'} Task {result['task_id']}")
-    print(f"   Elapsed: {result['elapsed_sec']}s")
-    if result["output"]:
-        print(f"\n{result['output']}")
-    print()
+    if result.get("success"):
+        print(f"✅ Success via {result.get('provider', '?')}/{result.get('model', '?')}")
+        if result.get("output"):
+            print(f"  {result['output']}")
+    else:
+        print(f"❌ Failed")
+        if result.get("error"):
+            print(f"  Error: {result['error']}")
 
 
 def cmd_route_dispatch(args):
@@ -282,6 +291,98 @@ def cmd_test(args):
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────
+def cmd_cost(args):
+    """Show cost summary."""
+    from hermes_router import get_cost_summary
+
+    days = args.days or 7
+    summary = get_cost_summary(days)
+
+    print(f"📊 Cost Summary (last {summary['days']}d)")
+    print(f"   Total tasks: {summary['total_tasks']}")
+    print()
+
+    if summary["by_provider"]:
+        print("   By Provider:")
+        for provider, stats in sorted(summary["by_provider"].items()):
+            icon = "🟢" if stats["success"] == stats["tasks"] else "🟡"
+            print(f"     {icon} {provider}: {stats['success']}/{stats['tasks']} ok")
+
+    if summary["by_complexity"]:
+        print()
+        print("   By Complexity:")
+        for comp, count in sorted(summary["by_complexity"].items()):
+            print(f"     {comp}: {count} tasks")
+
+
+def cmd_provider_list(args):
+    """List all providers in the pool."""
+    from hermes_router import PROVIDER_POOLS, get_provider_pool
+
+    print("🌐 Provider Pools")
+    print()
+
+    for tier in ["low", "medium", "high"]:
+        pool = get_provider_pool(tier)
+        icon = {"low": "🟢", "medium": "🟡", "high": "🔴"}[tier]
+        label = {"low": "LOW (free local)", "medium": "MEDIUM (free API)",
+                 "high": "HIGH (paid)"}[tier]
+        print(f"  {icon} {label}")
+        for i, p in enumerate(pool):
+            prefix = "  └→" if i == len(pool) - 1 else "  ├→"
+            cost_str = f"R$0" if p["cost_per_1k_tokens"] == 0 else f"${p['cost_per_1k_tokens']}/1K tokens"
+            print(f"  {prefix} {p['description']}  ({cost_str})")
+        print()
+
+
+def cmd_provider_route(args):
+    """Show route suggestion for a prompt."""
+    from hermes_router import route
+
+    if not args.prompt:
+        print("❌ Usage: switch-adapter provider route \"<prompt>\"")
+        return
+
+    routing = route(args.prompt)
+    print(f"📋 Route Analysis")
+    print(f"   Complexity: {routing['complexity'].upper()}")
+    print(f"   Suggested:  {routing['description']}")
+    print(f"   Provider:   {routing['provider']}")
+    print(f"   Model:      {routing['model']}")
+    print(f"   Cost:       {'FREE' if routing['cost_per_1k_tokens'] == 0 else '$' + str(routing['cost_per_1k_tokens']) + '/1K tokens'}")
+    print()
+    print(f"   Pool ({len(routing['pool'])} providers in fallback chain):")
+    for p in routing['pool']:
+        icon = "→" if p == routing['pool'][0] else " "
+        print(f"     {icon} {p['description']}")
+
+
+# ── dashboard ────────────────────────────────────────────────────────────
+def cmd_dashboard(args):
+    """Show live provider status dashboard."""
+    data = build_dashboard()
+    print(render_dashboard(data))
+
+
+def cmd_dashboard_watch(args):
+    """Live-updating dashboard (every 10s)."""
+    import time as _time
+    try:
+        while True:
+            data = build_dashboard()
+            os.system("clear" if os.name == "posix" else "cls")
+            print(render_dashboard(data))
+            _time.sleep(10)
+    except KeyboardInterrupt:
+        print("\n  👋 Dashboard stopped.")
+
+
+def cmd_dashboard_json(args):
+    """Show dashboard as JSON."""
+    data = build_dashboard()
+    print(render_json(data))
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="LLM Switch Adapter — Route AI tasks to the cheapest available provider.",
@@ -321,6 +422,33 @@ def main():
     p = subparsers.add_parser("cost", help="Show cost summary")
     p.add_argument("--days", type=int, help="Number of days (default: 7)")
     p.set_defaults(func=cmd_cost)
+
+    # provider
+    provider_parser = subparsers.add_parser("provider", help="Provider pool management")
+    provider_sub = provider_parser.add_subparsers(dest="subcommand")
+
+    p = provider_sub.add_parser("list", help="List all providers in the pool")
+    p.set_defaults(func=cmd_provider_list)
+
+    p = provider_sub.add_parser("route", help="Show route suggestion for a prompt")
+    p.add_argument("prompt", nargs="?", help="The task prompt to classify")
+    p.set_defaults(func=cmd_provider_route)
+
+    # dashboard
+    db_parser = subparsers.add_parser("dashboard", help="Show live provider status + limits")
+    db_sub = db_parser.add_subparsers(dest="subcommand")
+
+    p = db_sub.add_parser("show", help="Show dashboard once")
+    p.set_defaults(func=cmd_dashboard)
+
+    p = db_sub.add_parser("json", help="Show dashboard as JSON")
+    p.set_defaults(func=cmd_dashboard_json)
+
+    p = db_sub.add_parser("watch", help="Live-updating dashboard (every 10s)")
+    p.set_defaults(func=cmd_dashboard_watch)
+
+    # Set 'show' as default when no subcommand given
+    db_parser.set_defaults(func=cmd_dashboard)
 
     # test
     p = subparsers.add_parser("test", help="Run self-test")
