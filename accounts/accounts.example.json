@@ -1,0 +1,33 @@
+{
+  "_comment": "Template — copy to accounts.json and fill in your accounts. DO NOT commit accounts.json.",
+  "version": "1.0",
+  "tools": {
+    "codex": {
+      "config_path": "~/.codex",
+      "detect_commands": ["exec"],
+      "rate_limit_patterns": [
+        "You've hit your usage limit",
+        "usage limit",
+        "rate limit",
+        "quota exceeded",
+        "try again at"
+      ],
+      "reset_time_pattern": "try again at ([\\d:]+\\s*[AP]M)",
+      "cooldown_minutes": 180,
+      "accounts": {
+        "conta1": {
+          "email": "you@example.com",
+          "exhausted": false,
+          "exhausted_at": null,
+          "usage_pct": null
+        },
+        "conta2": {
+          "email": "you+alt@example.com",
+          "exhausted": false,
+          "exhausted_at": null,
+          "usage_pct": null
+        }
+      }
+    }
+  }
+}

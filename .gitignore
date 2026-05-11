@@ -1,0 +1,36 @@
+# LLM Switch Adapter — Gitignore
+# ⚠️ SECURITY: Nunca commitar secrets, tokens, ou dados de conta
+
+# ── secrets & credentials ────────────────────────────────────────────────
+accounts/accounts.json       # Contém emails reais — usar accounts.example.json
+accounts/data/               # Snapshots (contém auth tokens)
+accounts/logs/               # Logs (contém dados de execução)
+*.env
+*.pem
+*.key
+*secret*
+*credential*
+
+# ── python ────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# ── IDE ───────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS ────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── backups de symlink (criados durante switch) ──────────────────────────
+*.backup.*
