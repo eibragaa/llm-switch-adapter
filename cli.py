@@ -26,6 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from account_manager import (
+    _parse_exhausted_at,
     add_account,
     list_accounts,
     snapshot_tool_config,
@@ -89,7 +90,7 @@ def cmd_codex_list(args):
                 name=name,
                 email=acc.get("email", ""),
                 exhausted=True,
-                exhausted_at=acc.get("exhausted_at"),
+                exhausted_at=_parse_exhausted_at(acc.get("exhausted_at")),
             )
             remaining = a.time_until_reset()
             if remaining > 0:

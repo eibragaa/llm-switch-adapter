@@ -185,6 +185,22 @@ def get_current_account(tool: str) -> Optional[str]:
 
 
 # ── account registry ─────────────────────────────────────────────────────
+
+def _parse_exhausted_at(val) -> Optional[float]:
+    """Parse exhausted_at from JSON — accepts float (unix timestamp) or ISO 8601 string."""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    # ISO 8601 string
+    try:
+        from datetime import datetime, timezone
+        s = str(val).replace("Z", "+00:00")
+        return datetime.fromisoformat(s).timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
 @dataclass
 class AccountStatus:
     name: str

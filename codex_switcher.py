@@ -6,6 +6,7 @@ symlink switch to the next available account.
 """
 
 import re
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -19,6 +20,7 @@ from account_manager import (
     reset_exhausted,
     list_accounts,
     log,
+    _parse_exhausted_at,
 )
 
 
@@ -94,7 +96,7 @@ def get_available_account() -> Optional[dict]:
 
     for name, acc in accounts.items():
         if acc.get("exhausted"):
-            exhausted_at = acc.get("exhausted_at")
+            exhausted_at = _parse_exhausted_at(acc.get("exhausted_at"))
             if exhausted_at:
                 cooldown = acc.get("cooldown_minutes", 180)
                 elapsed = (time.time() - exhausted_at) / 60
@@ -153,7 +155,7 @@ def status() -> dict:
             "active": name == current,
         }
         if acc.get("exhausted"):
-            exhausted_at = acc.get("exhausted_at")
+            exhausted_at = _parse_exhausted_at(acc.get("exhausted_at"))
             if exhausted_at:
                 cooldown = acc.get("cooldown_minutes", 180)
                 elapsed = (time.time() - exhausted_at) / 60
