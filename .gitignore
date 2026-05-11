@@ -2,9 +2,9 @@
 # ⚠️ SECURITY: Nunca commitar secrets, tokens, ou dados de conta
 
 # ── secrets & credentials ────────────────────────────────────────────────
-accounts/accounts.json       # Contém emails reais — usar accounts.example.json
-/accounts/data/               # Snapshots (contém auth tokens) — absolute path
-/accounts/logs/               # Logs (contém dados de execução) — absolute path
+accounts/accounts.json
+/accounts/data/
+/accounts/logs/
 *.env
 *.pem
 *.key

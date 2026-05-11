@@ -1,8 +1,0 @@
-2026-05-11T14:21:37.452934Z  INFO codex_cli::login: starting browser login flow
-2026-05-11T14:22:13.844451Z  INFO codex_login::server: received login callback path=/auth/callback has_code=true has_state=true has_error=false state_valid=true
-2026-05-11T14:22:13.844562Z  INFO codex_client::custom_ca: building HTTP client with rustls backend for custom CA bundle source_env="SSL_CERT_FILE" ca_path=/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/certifi/cacert.pem
-2026-05-11T14:22:13.847385Z  INFO codex_client::custom_ca: loaded certificates from custom CA bundle source_env="SSL_CERT_FILE" ca_path=/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/certifi/cacert.pem certificate_count=137
-2026-05-11T14:22:13.872231Z  INFO codex_login::server: starting oauth token exchange issuer=https://auth.openai.com/ token_endpoint=https://auth.openai.com/oauth/token redirect_uri=http://localhost:1455/auth/callback
-2026-05-11T14:22:14.352862Z  INFO codex_login::server: oauth token exchange succeeded status=200 OK
-2026-05-11T14:22:14.352923Z  INFO codex_client::custom_ca: building HTTP client with rustls backend for custom CA bundle source_env="SSL_CERT_FILE" ca_path=/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/certifi/cacert.pem
-2026-05-11T14:22:14.356239Z  INFO codex_client::custom_ca: loaded certificates from custom CA bundle source_env="SSL_CERT_FILE" ca_path=/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/certifi/cacert.pem certificate_count=137
