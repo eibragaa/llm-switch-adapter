@@ -1,0 +1,12 @@
+[2026-05-11 04:57:10] Account added: codex/conta1 (jean.braga@outlook.com)
+[2026-05-11 04:59:09] Account added: codex/conta1 (jean.braga@outlook.com)
+[2026-05-11 04:59:09] Snapshot saved (lightweight): /root/.codex → /root/switch-adapter/accounts/data/codex_conta1
+[2026-05-11 04:59:09] WARNING: codex process detected. Switch may cause issues.
+[2026-05-11 04:59:09] Backed up real dir to: /root/.codex.backup.20260511_045909
+[2026-05-11 04:59:09] Switched codex → conta1  (/root/switch-adapter/accounts/data/codex_conta1)
+[2026-05-11 05:00:56] Account added: codex/conta1 (jean.braga@outlook.com)
+[2026-05-11 05:00:56] WARNING: /root/.codex is a symlink. Snapshotting the TARGET instead.
+[2026-05-11 05:00:56] Snapshot saved (lightweight): /root/switch-adapter/accounts/data/codex_conta1 → /root/switch-adapter/accounts/data/codex_conta1
+[2026-05-11 05:00:56] WARNING: codex process detected. Switch may cause issues.
+[2026-05-11 05:00:56] Switched codex → conta1  (/root/switch-adapter/accounts/data/codex_conta1)
+[2026-05-11 09:50:45] Rate-limit detection timed out — assuming limited

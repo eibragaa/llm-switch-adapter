@@ -1,0 +1,33 @@
+2026-05-11T13:39:12.684518Z  INFO codex_cli::login: starting device code login flow
+2026-05-11T13:39:12.684625Z  INFO codex_client::custom_ca: building HTTP client with rustls backend for custom CA bundle source_env="SSL_CERT_FILE" ca_path=/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/certifi/cacert.pem
+2026-05-11T13:39:12.687653Z  INFO codex_client::custom_ca: loaded certificates from custom CA bundle source_env="SSL_CERT_FILE" ca_path=/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/certifi/cacert.pem certificate_count=137
+2026-05-11T13:39:13.186482Z  INFO codex_client::custom_ca: building HTTP client with rustls backend for custom CA bundle source_env="SSL_CERT_FILE" ca_path=/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/certifi/cacert.pem
+2026-05-11T13:39:13.189649Z  INFO codex_client::custom_ca: loaded certificates from custom CA bundle source_env="SSL_CERT_FILE" ca_path=/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/certifi/cacert.pem certificate_count=137
+2026-05-11T13:51:34.978324Z  INFO codex_cli::login: starting browser login flow
+2026-05-11T13:51:57.666432Z  INFO codex_cli::login: starting device code login flow
+2026-05-11T13:51:57.666541Z  INFO codex_client::custom_ca: building HTTP client with rustls backend for custom CA bundle source_env="SSL_CERT_FILE" ca_path=/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/certifi/cacert.pem
+2026-05-11T13:51:57.669379Z  INFO codex_client::custom_ca: loaded certificates from custom CA bundle source_env="SSL_CERT_FILE" ca_path=/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/certifi/cacert.pem certificate_count=137
+2026-05-11T13:51:58.081443Z  INFO codex_client::custom_ca: building HTTP client with rustls backend for custom CA bundle source_env="SSL_CERT_FILE" ca_path=/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/certifi/cacert.pem
+2026-05-11T13:51:58.084762Z  INFO codex_client::custom_ca: loaded certificates from custom CA bundle source_env="SSL_CERT_FILE" ca_path=/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/certifi/cacert.pem certificate_count=137
+2026-05-11T13:56:31.318095Z  INFO codex_cli::login: starting device code login flow
+2026-05-11T13:56:31.318199Z  INFO codex_client::custom_ca: building HTTP client with rustls backend for custom CA bundle source_env="SSL_CERT_FILE" ca_path=/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/certifi/cacert.pem
+2026-05-11T13:56:31.321024Z  INFO codex_client::custom_ca: loaded certificates from custom CA bundle source_env="SSL_CERT_FILE" ca_path=/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/certifi/cacert.pem certificate_count=137
+2026-05-11T14:05:16.461853Z  INFO codex_cli::login: starting browser login flow
+2026-05-11T14:06:31.852307Z  INFO codex_cli::login: starting device code login flow
+2026-05-11T14:06:31.852407Z  INFO codex_client::custom_ca: building HTTP client with rustls backend for custom CA bundle source_env="SSL_CERT_FILE" ca_path=/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/certifi/cacert.pem
+2026-05-11T14:06:31.855343Z  INFO codex_client::custom_ca: loaded certificates from custom CA bundle source_env="SSL_CERT_FILE" ca_path=/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/certifi/cacert.pem certificate_count=137
+2026-05-11T14:06:32.367302Z  INFO codex_client::custom_ca: building HTTP client with rustls backend for custom CA bundle source_env="SSL_CERT_FILE" ca_path=/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/certifi/cacert.pem
+2026-05-11T14:06:32.370369Z  INFO codex_client::custom_ca: loaded certificates from custom CA bundle source_env="SSL_CERT_FILE" ca_path=/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/certifi/cacert.pem certificate_count=137
+2026-05-11T14:06:53.693700Z  INFO codex_cli::login: starting device code login flow
+2026-05-11T14:06:53.693844Z  INFO codex_client::custom_ca: building HTTP client with rustls backend for custom CA bundle source_env="SSL_CERT_FILE" ca_path=/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/certifi/cacert.pem
+2026-05-11T14:06:53.696663Z  INFO codex_client::custom_ca: loaded certificates from custom CA bundle source_env="SSL_CERT_FILE" ca_path=/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/certifi/cacert.pem certificate_count=137
+2026-05-11T14:06:54.286897Z  INFO codex_client::custom_ca: building HTTP client with rustls backend for custom CA bundle source_env="SSL_CERT_FILE" ca_path=/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/certifi/cacert.pem
+2026-05-11T14:06:54.289919Z  INFO codex_client::custom_ca: loaded certificates from custom CA bundle source_env="SSL_CERT_FILE" ca_path=/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/certifi/cacert.pem certificate_count=137
+2026-05-11T14:09:20.101251Z  INFO codex_cli::login: starting browser login flow
+2026-05-11T14:10:11.685996Z  INFO codex_login::server: received login callback path=/auth/callback has_code=true has_state=true has_error=false state_valid=true
+2026-05-11T14:10:11.686090Z  INFO codex_client::custom_ca: building HTTP client with rustls backend for custom CA bundle source_env="SSL_CERT_FILE" ca_path=/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/certifi/cacert.pem
+2026-05-11T14:10:11.688881Z  INFO codex_client::custom_ca: loaded certificates from custom CA bundle source_env="SSL_CERT_FILE" ca_path=/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/certifi/cacert.pem certificate_count=137
+2026-05-11T14:10:11.714539Z  INFO codex_login::server: starting oauth token exchange issuer=https://auth.openai.com/ token_endpoint=https://auth.openai.com/oauth/token redirect_uri=http://localhost:1455/auth/callback
+2026-05-11T14:10:12.408931Z  INFO codex_login::server: oauth token exchange succeeded status=200 OK
+2026-05-11T14:10:12.409520Z  INFO codex_client::custom_ca: building HTTP client with rustls backend for custom CA bundle source_env="SSL_CERT_FILE" ca_path=/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/certifi/cacert.pem
+2026-05-11T14:10:12.412248Z  INFO codex_client::custom_ca: loaded certificates from custom CA bundle source_env="SSL_CERT_FILE" ca_path=/usr/local/lib/hermes-agent/venv/lib/python3.11/site-packages/certifi/cacert.pem certificate_count=137
