@@ -16,8 +16,9 @@ Usage:
     switch-adapter provider list                List all providers in the pool
     switch-adapter provider route <prompt>      Show route suggestion for a prompt
 
-    switch-adapter dashboard [--json]           Show live provider status + limits
-    switch-adapter dashboard watch              Live-updating dashboard (every 10s)
+    switch-adapter banner [--simple|--html]      Welcome banner + best provider pick
+    switch-adapter dashboard [--json]             Show live provider status + limits
+    switch-adapter dashboard watch                Live-updating dashboard (every 10s)
 
     switch-adapter test                         Run self-test
 """
@@ -49,6 +50,7 @@ from codex_switcher import (
 )
 from hermes_router import route, route_execute, get_cost_summary
 from dashboard import build_dashboard, render_dashboard, render_json
+from banner import build_banner, recommend_best_provider
 
 
 # ── codex commands ───────────────────────────────────────────────────────
@@ -357,6 +359,18 @@ def cmd_provider_route(args):
         print(f"     {icon} {p['description']}")
 
 
+# ── banner ──────────────────────────────────────────────────────────────
+def cmd_banner(args):
+    """Show welcome banner with provider status + best pick."""
+    style = "html" if args.html else "simple" if args.simple else "terminal"
+    print(build_banner(style))
+
+
+def cmd_banner_telegram(args):
+    """Banner formatted for Telegram (simple)."""
+    print(build_banner("simple"))
+
+
 # ── dashboard ────────────────────────────────────────────────────────────
 def cmd_dashboard(args):
     """Show live provider status dashboard."""
@@ -433,6 +447,12 @@ def main():
     p = provider_sub.add_parser("route", help="Show route suggestion for a prompt")
     p.add_argument("prompt", nargs="?", help="The task prompt to classify")
     p.set_defaults(func=cmd_provider_route)
+
+    # banner
+    banner_parser = subparsers.add_parser("banner", help="Welcome banner + best provider pick")
+    banner_parser.add_argument("--simple", action="store_true", help="Plain text (Telegram)")
+    banner_parser.add_argument("--html", action="store_true", help="HTML format")
+    banner_parser.set_defaults(func=cmd_banner)
 
     # dashboard
     db_parser = subparsers.add_parser("dashboard", help="Show live provider status + limits")
