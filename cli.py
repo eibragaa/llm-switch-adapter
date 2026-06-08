@@ -48,9 +48,9 @@ from codex_switcher import (
     mark_exhausted,
     reset_exhausted,
 )
-from hermes_router import route, route_execute, get_cost_summary
+from hermes_router import route, route_execute, get_cost_summary, recommend_best_provider
 from dashboard import build_dashboard, render_dashboard, render_json
-from banner import build_banner, recommend_best_provider
+from banner import build_banner
 
 
 # ── codex commands ───────────────────────────────────────────────────────

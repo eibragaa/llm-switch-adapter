@@ -1,10 +1,8 @@
 """
 Hermes Router — Complexity-based provider routing for cost optimization.
 
-Classifies task complexity and routes to the cheapest available provider:
-  - LOW    → Ollama local (qwen3:4b) → OpenRouter free
-  - MEDIUM → Nvidia free (3 models) → Ollama → OpenRouter
-  - HIGH   → DeepSeek paid (deepseek-v4-flash)
+Classifies task complexity and routes to the cheapest available provider
+based on REAL-TIME health data from the dashboard.
 
 Each tier has a prioritized pool — tries the first, falls back to next.
 Also provides cost tracking across providers.
@@ -18,6 +16,13 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Optional
+
+from provider_registry import (
+    PROVIDER_MAP,
+    get_providers_for_tier,
+    get_best_for_tier,
+    status_is_usable,
+)
 
 
 # ── paths ────────────────────────────────────────────────────────────────
@@ -55,39 +60,30 @@ COMPLEXITY_RULES = {
 }
 
 
-# ── provider pools ─────────────────────────────────────────────────────
-# Each tier = list of fallbacks. First in list = preferred.
-PROVIDER_POOLS = {
-    "low": [
-        {"provider": "ollama-local", "model": "qwen3:4b",
-         "cost_per_1k_tokens": 0, "description": "Ollama Local (qwen3:4b)"},
-        {"provider": "openrouter", "model": "qwen/qwen3-coder:free",
-         "cost_per_1k_tokens": 0, "description": "OpenRouter Free"},
-    ],
-    "medium": [
-        {"provider": "nvidia", "model": "qwen/qwen3-coder-480b-a35b-instruct",
-         "cost_per_1k_tokens": 0, "description": "Nvidia Free (qwen3-coder)"},
-        {"provider": "nvidia", "model": "z-ai/glm4.7",
-         "cost_per_1k_tokens": 0, "description": "Nvidia Free (glm4.7)"},
-        {"provider": "nvidia", "model": "minimaxai/minimax-m2.7",
-         "cost_per_1k_tokens": 0, "description": "Nvidia Free (minimax-m2.7)"},
-        {"provider": "ollama-local", "model": "qwen3:4b",
-         "cost_per_1k_tokens": 0, "description": "Ollama Local (qwen3:4b)"},
-        {"provider": "openrouter", "model": "qwen/qwen3-coder:free",
-         "cost_per_1k_tokens": 0, "description": "OpenRouter Free (fallback)"},
-    ],
-    "high": [
-        {"provider": "deepseek", "model": "deepseek-v4-flash",
-         "cost_per_1k_tokens": 0.00028, "description": "DeepSeek v4 Flash (paid)"},
-        {"provider": "openrouter", "model": "qwen/qwen3-coder:free",
-         "cost_per_1k_tokens": 0, "description": "OpenRouter Free (emergency)"},
-    ],
-}
+# ── provider pools (backward-compat static) ──────────────────────────────
+# Used when no health data is available.
+# The REGISTRY (provider_registry.py) is the single source of truth.
+PROVIDER_POOLS = {}
 
 
-def get_provider_pool(complexity: str) -> list[dict]:
-    """Get the provider pool for a given complexity tier."""
-    return PROVIDER_POOLS.get(complexity, PROVIDER_POOLS["medium"])
+def get_provider_pool(complexity: str, health_data: dict | None = None
+                      ) -> list[dict]:
+    """Get the provider pool for a complexity tier.
+    
+    If health_data is provided, filters by real-time availability.
+    Returns list of dicts matching the old format (backward compat).
+    """
+    providers = get_providers_for_tier(complexity, health_data)
+    return [
+        {
+            "provider": p.provider_slug or p.key,
+            "model": p.model,
+            "cost_per_1k_tokens": p.cost_per_1k,
+            "description": p.description,
+            "key": p.key,
+        }
+        for p in providers
+    ]
 
 
 def classify_complexity(prompt: str) -> str:
@@ -121,14 +117,23 @@ def classify_complexity(prompt: str) -> str:
 
 
 # ── routing ──────────────────────────────────────────────────────────────
-def route(prompt: str) -> dict:
+def route(prompt: str, health_data: dict | None = None) -> dict:
     """Determine which provider/model to use for a given prompt.
+
+    If health_data is provided (from dashboard), routes based on
+    real-time availability instead of static defaults.
 
     Returns: {provider, model, complexity, cost_per_1k_tokens, pool, description}
     """
     complexity = classify_complexity(prompt)
-    pool = get_provider_pool(complexity)
-    best = pool[0]
+    pool = get_provider_pool(complexity, health_data)
+    best = pool[0] if pool else {
+        "provider": "deepseek",
+        "model": "deepseek-v4-flash",
+        "cost_per_1k_tokens": 0.00028,
+        "description": "DeepSeek Paid (emergency fallback)",
+        "key": "deepseek",
+    }
     return {
         "complexity": complexity,
         "provider": best["provider"],
@@ -139,17 +144,109 @@ def route(prompt: str) -> dict:
     }
 
 
+def recommend_best_provider(data: dict) -> dict:
+    """Analyze dashboard data and recommend the best provider
+    for each complexity tier RIGHT NOW.
+    
+    Uses the registry + health data to make intelligent choices.
+    """
+    # Get health-based pools
+    rec = {
+        "low": {"provider": "N/A", "model": "", "cost": "FREE", "available": False},
+        "medium": {"provider": "N/A", "model": "", "cost": "FREE", "available": False},
+        "high": {"provider": "N/A", "model": "", "cost": "FREE", "available": False},
+        "codex": {"best_account": None, "all_exhausted": False,
+                  "active": None, "available": True},
+        "overall": {"best_value": "", "reason": "", "savings_today": "—"},
+    }
+    
+    # Best for each tier from health data
+    for tier in ["low", "medium", "high"]:
+        best = get_best_for_tier(tier, data)
+        if best and status_is_usable(data.get(best.key, {}).get("status", "")):
+            rec[tier] = {
+                "provider": best.name,
+                "model": best.model,
+                "cost": best.cost_display,
+                "available": True,
+                "_key": best.key,
+            }
+        else:
+            # Fallback: try ANY provider for this tier (even degraded)
+            fallback = get_best_for_tier(tier, None)
+            if fallback:
+                rec[tier] = {
+                    "provider": fallback.name,
+                    "model": fallback.model,
+                    "cost": fallback.cost_display,
+                    "available": False,  # not currently healthy
+                    "_key": fallback.key,
+                }
+    
+    # --- CODEX ---
+    codex = data.get("codex", [])
+    ready_accounts = [a for a in codex if a.get("status") == "ready"]
+    exhausted_accounts = [a for a in codex if "rate_limited" in a.get("status", "")]
+    active = next((a for a in codex if a.get("active")), None)
+
+    if ready_accounts:
+        rec["codex"]["best_account"] = ready_accounts[0]["name"]
+        rec["codex"]["active"] = active["name"] if active else ready_accounts[0]["name"]
+    elif exhausted_accounts:
+        rec["codex"]["all_exhausted"] = True
+        rec["codex"]["available"] = False
+        rec["codex"]["active"] = active["name"] if active else "N/A"
+
+    # --- OVERALL recommendation ---
+    costs = data.get("costs", {})
+    total = costs.get("today_tasks", 0)
+    free_tasks = costs.get("today_free", 0)
+    paid_tasks = costs.get("today_paid", 0)
+
+    if total > 0:
+        free_pct = int(free_tasks / total * 100)
+        rec["overall"]["savings_today"] = f"{free_pct}% free"
+    else:
+        rec["overall"]["savings_today"] = "—"
+
+    # Best value pick
+    for tier in ["low", "medium", "high"]:
+        if rec[tier].get("available"):
+            rec["overall"]["best_value"] = f"{tier.upper()} \u2794 {rec[tier]['provider']} ({rec[tier]['cost']})"
+            break
+    if not rec["overall"]["best_value"]:
+        rec["overall"]["best_value"] = "\u26a0 Nenhum provider disponivel!"
+
+    # Smart reason
+    ollama = data.get("ollama", {})
+    if rec["overall"]["best_value"]:
+        if not rec["low"].get("available") and ollama.get("status") == "no_model":
+            rec["overall"]["reason"] = "Dica: rode ollama pull deepseek-v4-flash:cloud para ativar modelo local"
+        elif paid_tasks > 0 and total > 0:
+            pct_paid = int(paid_tasks / total * 100)
+            if pct_paid > 30:
+                rec["overall"]["reason"] = f"\u26a0 {pct_paid}% das tarefas foram pagas — tente tasks mais simples no free"
+            elif pct_paid == 0:
+                rec["overall"]["reason"] = "100% free hoje! \U0001f389"
+            else:
+                rec["overall"]["reason"] = "Maioria das tarefas em free — keep it up!"
+
+    return rec
+
+
 # ── execution ────────────────────────────────────────────────────────────
 def route_execute(
     prompt: str,
     provider: Optional[str] = None,
     model: Optional[str] = None,
     timeout: int = 300,
+    health_data: dict | None = None,
 ) -> dict:
     """Route and execute a prompt through the best provider.
 
     Tries each provider in the pool until one succeeds (fallback chain).
     If provider/model are specified, they override the router and no fallback.
+    If health_data is provided, uses real-time health for routing.
     """
     if provider and model:
         # Manual override — single attempt, no fallback
@@ -162,7 +259,7 @@ def route_execute(
         return result
 
     # Auto-route — try pool in order
-    routing = route(prompt)
+    routing = route(prompt, health_data)
     pool = routing["pool"]
     errors = []
 
