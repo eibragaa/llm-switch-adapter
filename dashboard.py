@@ -11,6 +11,7 @@ No API keys are stored here — reads from Hermes config or env.
 Uses curl via subprocess for reliability (better timeout control).
 """
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
 import subprocess
@@ -61,24 +62,42 @@ def _curl(method: str, url: str, headers: dict = None,
         return {"status": 0, "body": str(e)[:200], "elapsed": round(time.time() - start, 2)}
 
 
+# Cache for auth.json (avoid reading from disk 7x per refresh)
+_auth_cache = {"data": None, "mtime": 0}
+
 def _get_credential(provider: str) -> str:
-    """Get access token for a provider from Hermes auth.json credential pool."""
+    """Get access token for a provider from Hermes auth.json credential pool.
+    Cached in memory to avoid reading from disk on every call."""
     auth_path = Path(os.environ.get("HOME", "/root")) / ".hermes" / "auth.json"
+    
+    # Check if cache needs refresh (file changed or first access)
     try:
-        with open(auth_path) as f:
-            data = json.load(f)
-        pool = data.get("credential_pool", {})
+        current_mtime = os.path.getmtime(auth_path)
+        if current_mtime != _auth_cache["mtime"]:
+            with open(auth_path) as f:
+                _auth_cache["data"] = json.load(f)
+                _auth_cache["mtime"] = current_mtime
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return ""
+    
+    # Get credential from cached data
+    try:
+        pool = _auth_cache["data"].get("credential_pool", {})
         creds = pool.get(provider, [])
         if creds and isinstance(creds, list) and len(creds) > 0:
             return creds[0].get("access_token", "")
-    except (FileNotFoundError, json.JSONDecodeError, KeyError, IndexError):
+    except (KeyError, IndexError, AttributeError):
         pass
     return ""
 
 
 def _curl_model_check(url: str, timeout: int = 5) -> dict:
-    """Like _curl but returns full model list without body truncation."""
-    cmd = ["curl", "-s", "-w", "\n%{http_code}", "--max-time", str(timeout), url]
+    """Like _curl but returns full model list without body truncation.
+    Sends a browser User-Agent to avoid Cloudflare Bot Protection (error 1010)
+    on providers like opencode.ai that block default curl/python-urllib."""
+    cmd = ["curl", "-s", "-w", "\n%{http_code}", "--max-time", str(timeout),
+           "-A", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+           url]
     start = time.time()
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 2)
@@ -209,29 +228,47 @@ def check_ollama_cloud(model: str = "deepseek-v4-flash") -> dict:
             "limit_remaining": None}
 
 
-def check_nous(model: str = "stepfun/step-3.5-flash") -> dict:
+def check_nous(model: str = "stepfun/step-3.7-flash:free") -> dict:
     """Check NousResearch inference API (free tier)."""
-    api_key = os.environ.get("NOUS_API_KEY") or _get_credential("nous")
-    if not api_key:
-        return {"status": "no_key", "elapsed": 0, "model": model,
-                "detail": "No API key (set NOUS_API_KEY or nous credential)",
-                "limit_remaining": None}
-    payload = json.dumps({"model": model, "messages": [{"role": "user", "content": "."}], "max_tokens": 1})
-    r = _curl("POST", "https://inference-api.nousresearch.com/v1/chat/completions",
-              headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-              data=payload, timeout=8)
-    if r["status"] == 200:
-        return {"status": "online", "elapsed": r["elapsed"], "model": model,
-                "detail": "step-3.5-flash free | $0.00", "limit_remaining": "infinite"}
-    elif r["status"] in (401, 403):
-        return {"status": "no_key", "elapsed": r["elapsed"], "model": model,
-                "detail": f"Auth failed ({r['status']})", "limit_remaining": None}
-    elif r["status"] == 429:
-        return {"status": "rate_limited", "elapsed": r["elapsed"], "model": model,
-                "detail": "Rate limited (429)", "limit_remaining": None}
-    else:
-        return {"status": "offline", "elapsed": r["elapsed"], "model": model,
-                "detail": f"HTTP {r['status']}: {r['body'][:80]}", "limit_remaining": None}
+    def _get_nous_credentials():
+        """Return (access_token, agent_key) from credential pool or env."""
+        access_token = os.environ.get("NOUS_API_KEY") or _get_credential("nous")
+        agent_key = ""
+        try:
+            auth_path = Path(os.environ.get("HOME", "/root")) / ".hermes" / "auth.json"
+            with open(auth_path) as f:
+                data = json.load(f)
+            creds = data.get("credential_pool", {}).get("nous", [])
+            if creds and isinstance(creds, list):
+                agent_key = creds[0].get("agent_key", "")
+        except Exception:
+            agent_key = ""
+        return access_token, agent_key
+
+    access_token, agent_key = _get_nous_credentials()
+    # Try access_token first
+    for token, label in [(access_token, "access_token"), (agent_key, "agent_key")]:
+        if not token:
+            continue
+        payload = json.dumps({"model": model, "messages": [{"role": "user", "content": "."}], "max_tokens": 1})
+        r = _curl("POST", "https://inference-api.nousresearch.com/v1/chat/completions",
+                  headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                  data=payload, timeout=8)
+        if r["status"] == 200:
+            return {"status": "online", "elapsed": r["elapsed"], "model": model,
+                    "detail": f"{model} free | $0.00", "limit_remaining": "infinite"}
+        elif r["status"] in (401, 403):
+            # try next token
+            continue
+        elif r["status"] == 429:
+            return {"status": "rate_limited", "elapsed": r["elapsed"], "model": model,
+                    "detail": "Rate limited (429)", "limit_remaining": None}
+        else:
+            return {"status": "offline", "elapsed": r["elapsed"], "model": model,
+                    "detail": f"HTTP {r['status']}: {r['body'][:80]}", "limit_remaining": None}
+    # If all tokens failed with auth errors
+    return {"status": "no_key", "elapsed": 0, "model": model,
+            "detail": "No valid NousResearch token (access_token/agent_key)", "limit_remaining": None}
 
 
 def check_nvidia(model: str = "qwen/qwen3-coder-480b-a35b-instruct") -> dict:
@@ -271,14 +308,19 @@ def check_opencode_go(model: str = "deepseek-v4-flash") -> dict:
         return {"status": "no_key", "elapsed": 0, "model": model,
                 "detail": "No API key (set OPENCODE_GO_API_KEY)", "limit_remaining": None}
 
-    r = _curl_model_check("https://opencode.ai/go/v1/models", timeout=8)
+    # Endpoint correto: https://opencode.ai/zen/go/v1 (com 'zen' no path)
+    # /go/v1 → 404; /zen/go/v1 → 200 com modelos Go (minimax-m3, etc.)
+    r = _curl_model_check("https://opencode.ai/zen/go/v1/models", timeout=8)
     if r["status"] == 200 and r.get("models"):
         return {"status": "online", "elapsed": r["elapsed"], "model": model,
                 "detail": f"{len(r['models'])} models | sub $10/mo", "limit_remaining": "subscription"}
 
     payload = json.dumps({"model": model, "messages": [{"role": "user", "content": "."}], "max_tokens": 1})
-    r2 = _curl("POST", "https://opencode.ai/go/v1/chat/completions",
-               headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+    # User-Agent adicionado para evitar Cloudflare 1010 (Bot Protection)
+    r2 = _curl("POST", "https://opencode.ai/zen/go/v1/chat/completions",
+               headers={"Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
                data=payload, timeout=10)
     if r2["status"] == 200:
         return {"status": "online", "elapsed": r2["elapsed"], "model": model,
@@ -287,7 +329,7 @@ def check_opencode_go(model: str = "deepseek-v4-flash") -> dict:
         return {"status": "no_key", "elapsed": r2["elapsed"], "model": model,
                 "detail": f"Auth failed ({r2['status']})", "limit_remaining": None}
     elif r2["status"] == 404:
-        return {"status": "limited", "elapsed": r2["elapsed"], "model": model,
+        return {"status": "offline", "elapsed": r2["elapsed"], "model": model,
                 "detail": "API restructuring (404)", "limit_remaining": "subscription"}
     else:
         return {"status": "offline", "elapsed": r2["elapsed"], "model": model,
@@ -323,10 +365,16 @@ def check_deepseek() -> dict:
             "detail": f"Unreachable ({r2['body'][:60]})", "balance": None}
 
 
+# Flag para garantir que sys.path.insert roda apenas UMA vez
+_codex_syspath_added = False
+
 def check_codex_accounts() -> list[dict]:
     """Check all Codex accounts status."""
+    global _codex_syspath_added
     try:
-        sys.path.insert(0, str(BASE_DIR))
+        if not _codex_syspath_added:
+            sys.path.insert(0, str(BASE_DIR))
+            _codex_syspath_added = True
         from codex_switcher import status as codex_status
         from account_manager import get_current_account
     except ImportError:
@@ -371,26 +419,94 @@ def check_finbot_usage() -> dict:
     except (FileNotFoundError, json.JSONDecodeError, ValueError, KeyError):
         pass
 
+    def _write_cache(data: dict) -> None:
+        """Write data to cache file."""
+        try:
+            with open(CACHE_FILE, 'w') as f:
+                json.dump({
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "data": data
+                }, f, indent=2)
+        except (OSError, TypeError):
+            pass  # Non-critical — cache write failure is silent
+
     cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
            "finbot@100.126.136.58",
            "cd /home/finbot/finbot && .venv/bin/python scripts/ollama-usage.py"]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         if result.returncode != 0:
-            return {"status": "error", "detail": f"SSH exit {result.returncode}",
+            err = {"status": "error", "detail": f"SSH exit {result.returncode}",
                     "providers": {}, "total_requests": 0}
+            _write_cache(err)
+            return err
         data = json.loads(result.stdout)
         if "error" in data:
-            return {"status": "error", "detail": data["error"], "providers": {}, "total_requests": 0}
+            err = {"status": "error", "detail": data["error"], "providers": {}, "total_requests": 0}
+            _write_cache(err)
+            return err
         data["status"] = "ok"
         data["_source"] = "ssh_fallback"
+        _write_cache(data)  # ← Escrever no cache!
         return data
     except subprocess.TimeoutExpired:
-        return {"status": "error", "detail": "SSH timeout", "providers": {}, "total_requests": 0}
+        err = {"status": "error", "detail": "SSH timeout", "providers": {}, "total_requests": 0}
+        _write_cache(err)
+        return err
     except json.JSONDecodeError as e:
-        return {"status": "error", "detail": f"JSON: {e}", "providers": {}, "total_requests": 0}
+        err = {"status": "error", "detail": f"JSON: {e}", "providers": {}, "total_requests": 0}
+        _write_cache(err)
+        return err
     except Exception as e:
-        return {"status": "error", "detail": str(e)[:200], "providers": {}, "total_requests": 0}
+        err = {"status": "error", "detail": str(e)[:200], "providers": {}, "total_requests": 0}
+        _write_cache(err)
+        return err
+
+
+# ── Tailscale ────────────────────────────────────────────────────────────
+
+def check_tailscale() -> dict:
+    """Get Tailscale status and peer info."""
+    try:
+        # Get local Tailscale IP
+        result = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=5)
+        local_ip = result.stdout.strip() if result.returncode == 0 else "N/A"
+        
+        # Get peer status
+        result = subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True, timeout=5)
+        if result.returncode != 0:
+            return {"status": "error", "local_ip": local_ip, "peers": [], "detail": "tailscale status failed"}
+        
+        data = json.loads(result.stdout)
+        peers = []
+        for peer in data.get("Peer", {}).values():
+            peers.append({
+                "dns_name": peer.get("DNSName", "").rstrip("."),
+                "tailscale_ip": peer.get("TailscaleIPs", ["N/A"])[0] if peer.get("TailscaleIPs") else "N/A",
+                "online": peer.get("Online", False),
+                "last_seen": peer.get("LastSeen", ""),
+                "active": peer.get("Active", False),
+            })
+        
+        online_peers = sum(1 for p in peers if p["online"])
+        total_peers = len(peers)
+        
+        return {
+            "status": "connected" if total_peers > 0 else "no_peers",
+            "local_ip": local_ip,
+            "peers": peers,
+            "online_count": online_peers,
+            "total_count": total_peers,
+            "dashboard_url": f"http://{local_ip}:8080",
+        }
+    except subprocess.TimeoutExpired:
+        return {"status": "timeout", "local_ip": "N/A", "peers": [], "detail": "Tailscale command timeout"}
+    except FileNotFoundError:
+        return {"status": "not_installed", "local_ip": "N/A", "peers": [], "detail": "tailscale not installed"}
+    except (json.JSONDecodeError, KeyError) as e:
+        return {"status": "error", "local_ip": "N/A", "peers": [], "detail": str(e)[:100]}
+    except Exception as e:
+        return {"status": "error", "local_ip": "N/A", "peers": [], "detail": str(e)[:100]}
 
 
 # ── cost stats ──────────────────────────────────────────────────────────
@@ -439,20 +555,43 @@ def get_cost_stats(days: int = 1) -> dict:
 # ── dashboard builder ─────────────────────────────────────────────────────
 
 def build_dashboard() -> dict:
-    """Run all health checks and return structured dashboard data."""
-    return {
-        "ollama": check_ollama("deepseek-v4-flash:cloud"),
-        "ollama_cloud": check_ollama_cloud("deepseek-v4-flash"),
-        "nous": check_nous("stepfun/step-3.5-flash"),
-        "openrouter": check_openrouter(),
-        "nvidia": check_nvidia("qwen/qwen3-coder-480b-a35b-instruct"),
-        "opencode_go": check_opencode_go("deepseek-v4-flash"),
-        "deepseek": check_deepseek(),
-        "codex": check_codex_accounts(),
-        "finbot_usage": check_finbot_usage(),
-        "costs": get_cost_stats(),
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    """Run all health checks in parallel and return structured dashboard data."""
+    checks = {
+        "ollama": lambda: check_ollama("deepseek-v4-flash:cloud"),
+        "ollama_cloud": lambda: check_ollama_cloud("deepseek-v4-flash"),
+        "nous": lambda: check_nous("stepfun/step-3.7-flash:free"),
+        "openrouter": check_openrouter,
+        "nvidia": lambda: check_nvidia("qwen/qwen3-coder-480b-a35b-instruct"),
+        "deepseek": check_deepseek,
+        "codex": check_codex_accounts,
+        "finbot_usage": check_finbot_usage,
+        "tailscale": check_tailscale,
+        "costs": get_cost_stats,
     }
+    
+    results = {}
+    
+    # Run all checks in parallel with ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        future_to_key = {executor.submit(fn): key for key, fn in checks.items()}
+        for future in as_completed(future_to_key):
+            key = future_to_key[future]
+            try:
+                results[key] = future.result(timeout=15)  # 15s timeout per check
+            except Exception as e:
+                results[key] = {"status": "error", "detail": str(e)[:100]}
+    
+    # Add model registry data
+    try:
+        from provider_registry import PROVIDER_MAP, ALL_PROVIDERS, DISPLAY_ORDER
+        from dashboard_data import get_data_service
+        service = get_data_service()
+        results["models"] = service.get_model_registry()
+    except Exception:
+        results["models"] = {"categories": []}
+    
+    results["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return results
 
 
 # ── TUI render (data-driven) ────────────────────────────────────────────
@@ -552,7 +691,7 @@ def render_dashboard(data: dict) -> str:
     cost = c["estimated_cost_usd"]
     savings = max(0, total - paid)
 
-    lines.append(f"  {B}\U0001f4ca USO HOJE — {total} tarefa(s){S}")
+    lines.append(f"  {B}\U0001f4ca USO HOJE \u2014 {total} tarefa(s){S}")
     lines.append(f"  {G}Gratis: {free}{S}  |  {Y}Pago: {paid}{S}  |  {R}Erros: {errors}{S}")
     if total > 0:
         free_pct = int(free / total * 100) if total else 0
@@ -565,6 +704,27 @@ def render_dashboard(data: dict) -> str:
     else:
         lines.append(f"  {GR}Nenhuma tarefa roteada hoje{S}")
     lines.append("")
+
+    # ── Tailscale ──
+    ts = data.get("tailscale", {})
+    if ts:
+        ts_status = ts.get("status", "unknown")
+        local_ip = ts.get("local_ip", "N/A")
+        online = ts.get("online_count", 0)
+        total_peers = ts.get("total_count", 0)
+        dash_url = ts.get("dashboard_url", "")
+        
+        lines.append(sep())
+        lines.append(f"  {B}\U0001f310 TAILSCALE MESH{S}")
+        status_emoji = G + "\u25cf" + S if ts_status == "connected" else Y + "\u25cf" + S if ts_status == "no_peers" else R + "\u25cf" + S
+        lines.append(f"  {status_emoji} Status: {ts_status.upper()}  |  IP: {local_ip}")
+        lines.append(f"  Peers: {G}{online}{S}/{total_peers} online")
+        if dash_url:
+            lines.append(f"  Dashboard: {C}{dash_url}{S}")
+        for peer in ts.get("peers", []):
+            peer_emoji = G + "\u25cb" + S if peer["online"] else R + "\u25cb" + S
+            lines.append(f"  {peer_emoji} {peer['dns_name']} ({peer['tailscale_ip']})  {'Online' if peer['online'] else 'Offline'}")
+        lines.append("")
 
     # ── Route suggestion (from registry) ──
     lines.append(sep())
@@ -603,6 +763,25 @@ def render_json(data: dict) -> str:
     output["costs"] = {"tasks_today": data["costs"]["today_tasks"],
                        "free_today": data["costs"]["today_free"],
                        "paid_today": data["costs"]["today_paid"]}
+    # Add Tailscale for web UI
+    ts = data.get("tailscale", {})
+    if ts:
+        output["tailscale"] = {
+            "status": ts.get("status", "unknown"),
+            "local_ip": ts.get("local_ip", ""),
+            "online_count": ts.get("online_count", 0),
+            "total_count": ts.get("total_count", 0),
+            "dashboard_url": ts.get("dashboard_url", ""),
+            "peers": [
+                {"dns_name": p.get("dns_name", ""),
+                 "tailscale_ip": p.get("tailscale_ip", ""),
+                 "online": p.get("online", False)}
+                for p in ts.get("peers", [])
+            ]
+        }
+    # Add models registry for web UI
+    if "models" in data:
+        output["models"] = data["models"]
     return json.dumps(output, indent=2)
 
 
