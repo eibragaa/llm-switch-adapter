@@ -10,3 +10,31 @@
 [2026-05-11 05:00:56] WARNING: codex process detected. Switch may cause issues.
 [2026-05-11 05:00:56] Switched codex → conta1  (/root/switch-adapter/accounts/data/codex_conta1)
 [2026-05-11 09:50:45] Rate-limit detection timed out — assuming limited
+[2026-05-12 10:48:57] Marked exhausted: codex/conta2 (100%)
+[2026-05-12 10:48:57] Rate limit detected on conta2: You've hit your usage limit
+[2026-05-12 10:48:57] WARNING: codex process detected. Switch may cause issues.
+[2026-05-12 10:48:57] Switched codex → conta1  (/root/switch-adapter/accounts/data/codex_conta1)
+[2026-05-12 21:37:04] Marked exhausted: codex/conta1 (100%)
+[2026-05-12 21:37:04] Rate limit detected on conta1: You've hit your usage limit
+[2026-05-12 21:37:04] Reset exhausted: codex/conta2
+[2026-05-12 21:37:04] WARNING: codex process detected. Switch may cause issues.
+[2026-05-12 21:37:04] Switched codex → conta2  (/root/switch-adapter/accounts/data/codex_conta2)
+[2026-05-12 21:52:57] Marked exhausted: codex/conta2 (100%)
+[2026-05-12 21:52:57] Rate limit detected on conta2: You've hit your usage limit
+[2026-05-12 21:52:57] No available accounts — all exhausted or in cooldown
+[2026-05-17 01:27:18] Marked exhausted: codex/conta2 (100%)
+[2026-05-17 01:27:18] Rate limit detected on conta2: You've hit your usage limit
+[2026-05-17 01:27:18] Reset exhausted: codex/conta1
+[2026-05-17 01:27:18] WARNING: codex process detected. Switch may cause issues.
+[2026-05-17 01:27:18] Switched codex → conta1  (/root/repositorio/switch-adapter/accounts/data/codex_conta1)
+[2026-05-17 01:35:17] Marked exhausted: codex/conta1 (100%)
+[2026-05-17 01:35:17] Rate limit detected on conta1: You've hit your usage limit
+[2026-05-17 01:35:17] No available accounts — all exhausted or in cooldown
+[2026-05-17 22:18:26] Marked exhausted: codex/conta1 (100%)
+[2026-05-17 22:18:26] Rate limit detected on conta1: You've hit your usage limit
+[2026-05-17 22:18:26] Reset exhausted: codex/conta2
+[2026-05-17 22:18:26] WARNING: codex process detected. Switch may cause issues.
+[2026-05-17 22:18:26] Switched codex → conta2  (/root/repositorio/switch-adapter/accounts/data/codex_conta2)
+[2026-05-30 05:29:47] Reset exhausted: codex/conta1
+[2026-05-30 05:29:47] WARNING: codex process detected. Switch may cause issues.
+[2026-05-30 05:29:47] Switched codex → conta1  (/root/repositorio/switch-adapter/accounts/data/codex_conta1)

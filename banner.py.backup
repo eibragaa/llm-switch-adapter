@@ -1,0 +1,742 @@
+"""
+Banner — Compact provider status + real-time recommendation.
+Shows the best provider to use RIGHT NOW with Braille graphical bars.
+
+Usage:
+    switch-adapter banner           # Colored terminal banner (animated Braille!)
+    switch-adapter banner --simple  # Plain text (for Telegram/cron)
+    switch-adapter banner --html    # HTML (for system messages)
+"""
+
+import json
+import os
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(BASE_DIR))
+
+from dashboard import (
+    build_dashboard,
+    _get_credential,
+    render_dashboard,
+)
+
+# ── Braille bar patterns ──────────────────────────────────────────────
+# 7 fill levels per Braille character (empty → full)
+BRAILLE_STEPS = ['⠀', '⣀', '⣤', '⣦', '⣶', '⣷', '⣿']
+# Subtle pulse pattern for empty area (animation)
+BRAILLE_GLOW  = ['⠀', '⠄', '⠂', '⠁', '⠂', '⠄']
+# Wave patterns for filled area shimmer (animation)
+BRAILLE_WAVE  = ['⣿', '⣷', '⣾', '⣿', '⣧', '⣿']
+
+STEPS = len(BRAILLE_STEPS)  # 7
+
+
+def recommend_best_provider(data: dict) -> dict:
+    """
+    Analyze dashboard data and recommend the best provider
+    for each complexity tier RIGHT NOW.
+    """
+    ollama = data.get("ollama", {})
+    nous_ = data.get("nous", {})
+    openrouter = data.get("openrouter", {})
+    nvidia = data.get("nvidia", {})
+    deepseek = data.get("deepseek", {})
+    codex = data.get("codex", [])
+
+    rec = {
+        "low": {"provider": "Ollama Local", "model": "deepseek-v4-flash:cloud",
+                "cost": "FREE", "available": True},
+        "medium": {"provider": "Nvidia Free", "model": "qwen3-coder-480b",
+                   "cost": "FREE", "available": True},
+        "high": {"provider": "DeepSeek Paid", "model": "deepseek-v4-flash",
+                 "cost": "$0.00028/1K", "available": True},
+        "codex": {"best_account": None, "all_exhausted": False,
+                  "active": None, "available": True},
+        "overall": {"best_value": "", "reason": ""},
+    }
+
+    # --- LOW tier ---
+    if nous_.get("status") == "online":
+        rec["low"] = {"provider": "NousResearch Free",
+                      "model": "stepfun/step-3.5-flash",
+                      "cost": "FREE", "available": True,
+                      "latency": nous_.get("elapsed", 0)}
+    elif ollama.get("status") == "online" or ollama.get("status") == "no_model":
+        rec["low"]["available"] = ollama.get("status") == "online"
+        if not rec["low"]["available"]:
+            if openrouter.get("status") == "online":
+                rec["low"] = {"provider": "OpenRouter Free",
+                              "model": "qwen/qwen3-coder:free",
+                              "cost": "FREE", "available": True}
+    elif openrouter.get("status") == "online":
+        rec["low"] = {"provider": "OpenRouter Free",
+                      "model": "qwen/qwen3-coder:free",
+                      "cost": "FREE", "available": True}
+    else:
+        rec["low"]["available"] = False
+
+    # --- MEDIUM tier ---
+    if nous_.get("status") == "online":
+        rec["medium"] = {"provider": "NousResearch Free",
+                         "model": "stepfun/step-3.5-flash",
+                         "cost": "FREE", "available": True,
+                         "latency": nous_.get("elapsed", 0)}
+    elif nvidia.get("status") == "online":
+        rec["medium"] = {"provider": "Nvidia Free",
+                         "model": "qwen3-coder-480b",
+                         "cost": "FREE", "available": True,
+                         "latency": nvidia.get("elapsed", 0)}
+    elif ollama.get("status") == "online":
+        rec["medium"] = {"provider": "Ollama Local",
+                         "model": "deepseek-v4-flash",
+                         "cost": "FREE", "available": True}
+    elif openrouter.get("status") == "online":
+        rec["medium"] = {"provider": "OpenRouter Free",
+                         "model": "qwen/qwen3-coder:free",
+                         "cost": "FREE", "available": True}
+    else:
+        rec["medium"]["available"] = False
+
+    # --- HIGH tier ---
+    if nous_.get("status") == "online":
+        rec["high"] = {"provider": "NousResearch Free",
+                      "model": "stepfun/step-3.5-flash",
+                      "cost": "FREE", "available": True,
+                      "latency": nous_.get("elapsed", 0)}
+    elif deepseek.get("status") == "online":
+        rec["high"] = {"provider": "DeepSeek Paid",
+                       "model": "deepseek-v4-flash",
+                       "cost": "$0.00028/1K",
+                       "available": True,
+                       "balance": deepseek.get("balance", 0)}
+    elif openrouter.get("status") == "online":
+        rec["high"] = {"provider": "OpenRouter Free",
+                       "model": "qwen/qwen3-coder:free",
+                       "cost": "FREE (emergency)", "available": True}
+    else:
+        rec["high"]["available"] = False
+
+    # --- CODEX ---
+    ready_accounts = [a for a in codex if a["status"] == "ready"]
+    exhausted_accounts = [a for a in codex if "rate_limited" in a["status"]]
+    active = next((a for a in codex if a.get("active")), None)
+
+    if ready_accounts:
+        rec["codex"]["best_account"] = ready_accounts[0]["name"]
+        rec["codex"]["active"] = active["name"] if active else ready_accounts[0]["name"]
+    elif exhausted_accounts:
+        rec["codex"]["all_exhausted"] = True
+        rec["codex"]["available"] = False
+        rec["codex"]["active"] = active["name"] if active else "N/A"
+
+    # --- OVERALL recommendation ---
+    costs = data.get("costs", {})
+    total = costs.get("today_tasks", 0)
+    free_tasks = costs.get("today_free", 0)
+    paid_tasks = costs.get("today_paid", 0)
+
+    if total > 0:
+        free_pct = int(free_tasks / total * 100)
+        rec["overall"]["savings_today"] = f"{free_pct}% free"
+    else:
+        rec["overall"]["savings_today"] = "—"
+
+    # Best value pick
+    if rec["low"]["available"]:
+        rec["overall"]["best_value"] = f"LOW ➔ {rec['low']['provider']} ({rec['low']['cost']})"
+    elif rec["medium"]["available"]:
+        rec["overall"]["best_value"] = f"MEDIUM ➔ {rec['medium']['provider']} ({rec['medium']['cost']})"
+    elif rec["high"]["available"]:
+        rec["overall"]["best_value"] = f"HIGH ➔ {rec['high']['provider']} ({rec['high']['cost']})"
+    else:
+        rec["overall"]["best_value"] = "⚠ Nenhum provider disponivel!"
+
+    if rec["overall"]["best_value"]:
+        if not rec["low"]["available"] and ollama.get("status") == "no_model":
+            rec["overall"]["reason"] = "Dica: rode ollama pull deepseek-v4-flash:cloud para ativar modelo local"
+        elif paid_tasks > 0 and total > 0:
+            pct_paid = int(paid_tasks / total * 100)
+            if pct_paid > 30:
+                rec["overall"]["reason"] = f"⚠ {pct_paid}% das tarefas foram pagas — tente tasks mais simples no free"
+            else:
+                rec["overall"]["reason"] = "Maioria das tarefas em free — keep it up!"
+            if pct_paid == 0:
+                rec["overall"]["reason"] = "100% free hoje! 🎉"
+
+    return rec
+
+
+def build_banner(style: str = "terminal") -> str:
+    """Build the welcome banner with provider status + recommendation."""
+    data = build_dashboard()
+    rec = recommend_best_provider(data)
+    ts = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+    if style == "simple":
+        return _render_simple(data, rec, ts)
+    elif style == "html":
+        return _render_html(data, rec, ts)
+    else:
+        return _render_terminal(data, rec, ts)
+
+
+def _icon(s: str) -> str:
+    """Status icon."""
+    mapping = {
+        "online": "🟢",
+        "no_model": "🟡",
+        "limited": "🟡",
+        "offline": "🔴",
+        "no_key": "🟡",
+        "rate_limited": "🔴",
+        "ready": "🟢",
+        "error": "⚪",
+    }
+    return mapping.get(s, "⚪")
+
+
+# ── Braille Bar Engine ────────────────────────────────────────────────
+
+def _braille_bar(ratio: float, width: int = 9, animated: bool = False,
+                 frame: int = 0) -> str:
+    """
+    Draw a horizontal bar using Braille Unicode characters.
+    Each Braille char acts as a mini 2×4 column that fills up.
+    """
+    full = int(ratio * width)
+    partial = int(((ratio * width) - full) * STEPS)
+
+    bar_chars = []
+    for i in range(width):
+        if i < full:
+            # Filled portion
+            if animated and width > 2:
+                # Wave shimmer across the filled area
+                wave_idx = (frame + i * 5) % len(BRAILLE_WAVE)
+                bar_chars.append(BRAILLE_WAVE[wave_idx])
+            else:
+                bar_chars.append(BRAILLE_STEPS[-1])  # full ⣿
+        elif i == full and partial > 0:
+            bar_chars.append(BRAILLE_STEPS[partial])
+        else:
+            # Empty portion
+            if animated and width > 2:
+                # Subtle glow/pulse in empty region
+                glow_idx = (frame + i * 2) % len(BRAILLE_GLOW)
+                bar_chars.append(BRAILLE_GLOW[glow_idx])
+            else:
+                bar_chars.append(BRAILLE_STEPS[0])  # empty ⠀
+
+    return ''.join(bar_chars)
+
+
+def _health_braille(status: str, elapsed: float, width: int = 9,
+                    animated: bool = False, frame: int = 0) -> str:
+    """Draw a health bar using Braille chars based on status + latency."""
+    if status == "online":
+        if elapsed < 0.5:
+            return _braille_bar(1.0, width, animated, frame)
+        elif elapsed < 2:
+            return _braille_bar(0.75, width, animated, frame)
+        else:
+            return _braille_bar(0.5, width, animated, frame)
+    elif status == "no_model":
+        return _braille_bar(0.4, width, animated, frame)
+    elif status == "limited":
+        return _braille_bar(0.5, width, animated, frame)
+    elif status == "no_key":
+        return _braille_bar(0.25, width, animated, frame)
+    elif status == "rate_limited":
+        return _braille_bar(0.1, width, animated, frame)
+    else:
+        return _braille_bar(0.0, width, animated, frame)
+
+
+# ── Renderers ─────────────────────────────────────────────────────────
+
+def _render_terminal(data: dict, rec: dict, ts: str) -> str:
+    """Colorful terminal banner with ANSI + animated Braille bars."""
+    G = "\033[92m"
+    Y = "\033[93m"
+    R = "\033[91m"
+    C = "\033[36m"
+    B = "\033[1m"
+    GR = "\033[90m"
+    S = "\033[0m"
+
+    lines = []
+    W = 52
+
+    # ── Header box ──
+    lines.append("")
+    lines.append(f"  {B}{C}╔{'═' * (W - 2)}╗{S}")
+    lines.append(f"  {B}{C}║  ◈ SWITCH ADAPTER — BRAILLE STATUS ◈{' ' * (W - 48)}║{S}")
+    lines.append(f"  {B}{C}║{S}  {GR}{ts}{S}{' ' * (W - 26 - len(ts))}{B}{C}║{S}")
+    lines.append(f"  {B}{C}╚{'═' * (W - 2)}╝{S}")
+    lines.append("")
+
+    # ── Provider bars (Braille) ──
+    lines.append(f"  {B}{GR}PROVIDER BRAILLE BARS{S}")
+    lines.append(f"  {GR}{'─' * (W - 3)}{S}")
+
+    for name, key in [("Ollama", "ollama"), ("OllamaCloud", "ollama_cloud"),
+                      ("OpenRouter", "openrouter"),
+                      ("Nvidia", "nvidia"), ("Nous", "nous"), ("DeepSeek", "deepseek")]:
+        p = data[key]
+        status = p["status"]
+        elapsed = p.get("elapsed", 0)
+        icon = _icon(status)
+        hbar = _health_braille(status, elapsed)
+        lat_str = f"{elapsed:.1f}s" if elapsed > 0 else "—"
+
+        if status == "online":
+            label = f"{G}{name:12s}{S}"
+        elif status in ("no_model", "no_key", "limited"):
+            label = f"{Y}{name:12s}{S}"
+        else:
+            label = f"{R}{name:12s}{S}"
+
+        # Color the bar based on status
+        if status == "online":
+            bar_colored = f"{G}{hbar}{S}"
+        elif status in ("no_model", "no_key", "limited"):
+            bar_colored = f"{Y}{hbar}{S}"
+        elif status == "offline":
+            bar_colored = f"{R}{hbar}{S}"
+        else:
+            bar_colored = f"{GR}{hbar}{S}"
+
+        lines.append(f"  {icon} {label} {bar_colored}  {GR}{lat_str}{S}")
+
+    # ── Finbot Token Consumption ──
+    fu = data.get("finbot_usage", {})
+    if fu.get("status") == "ok":
+        lines.append("")
+        lines.append(f"  {B}{GR}FINBOT TOKEN CONSUMPTION{S}")
+        lines.append(f"  {GR}{'─' * (W - 3)}{S}")
+        for key, prov in sorted(fu.get("providers", {}).items()):
+            t = prov.get("today", {})
+            tt = prov.get("total", {})
+            pd_color = G if t.get("requests", 0) == 0 else C
+            if t.get("requests", 0) > 0:
+                lines.append(f"  {pd_color}●{S} {B}{prov.get('provider','?').upper()}{S} ({GR}{prov.get('model','?')}{S})")
+                lines.append(f"     {B}Today:{S} {t['total_tokens']} tokens ({t['requests']} reqs, P:{t['prompt_tokens']} C:{t['completion_tokens']})")
+            else:
+                lines.append(f"  {GR}●{S} {B}{prov.get('provider','?').upper()}{S} ({GR}{prov.get('model','?')}{S})")
+            lines.append(f"     {GR}Total tracked:{S} {tt.get('total_tokens', 0)} tokens ({tt.get('requests', 0)} reqs)")
+        if not fu.get("providers"):
+            lines.append(f"  {GR}Aguardando requisicoes — bot reiniciado{S}")
+    elif fu.get("status") == "error" and fu.get("detail"):
+        lines.append(f"")
+        lines.append(f"  {R}●{S} FINBOT {GR}{fu['detail'][:60]}{S}")
+
+    # ── Codex accounts ──
+    if data.get("codex"):
+        lines.append("")
+        lines.append(f"  {B}{GR}CODEX ACCOUNTS{S}")
+        lines.append(f"  {GR}{'─' * (W - 3)}{S}")
+        for acc in data["codex"]:
+            if acc["status"] == "ready":
+                dot = f"{G}●{S}"
+                bar = f"{G}{_braille_bar(1.0, 10)}{S}"
+            elif "rate_limited" in acc["status"]:
+                dot = f"{R}●{S}"
+                bar = f"{R}{_braille_bar(0.2, 10)}{S}"
+            else:
+                dot = f"{Y}●{S}"
+                bar = f"{Y}{_braille_bar(0.5, 10)}{S}"
+            active_m = f"  {C}← active{S}" if acc.get("active") else ""
+            lines.append(f"  {dot} Codex ({acc['name']}) {bar}{active_m}")
+
+    # ── Usage bar ──
+    costs = data.get("costs", {})
+    total = costs.get("today_tasks", 0)
+    free_tasks = costs.get("today_free", 0)
+    paid_tasks = costs.get("today_paid", 0)
+    errors = costs.get("today_errors", 0)
+
+    lines.append("")
+    lines.append(f"  {B}{GR}TODAY'S USAGE{S}")
+    lines.append(f"  {GR}{'─' * (W - 3)}{S}")
+
+    if total > 0:
+        free_pct = int(free_tasks / total * 100)
+        paid_pct = int(paid_tasks / total * 100)
+        err_pct = int(errors / total * 100)
+
+        bar_w = 10
+        free_fill = int(free_pct * bar_w / 100)
+        paid_fill = int(paid_pct * bar_w / 100)
+        err_fill = int(err_pct * bar_w / 100)
+
+        usage_bar = f"{G}{_braille_bar(free_pct / 100, bar_w)}{S}"
+
+        lines.append(f"  {B}Total: {total} tarefas{S}")
+        lines.append(f"  {usage_bar}")
+        lines.append(f"  {G}Free{S}: {free_tasks} ({free_pct}%)  {Y}Paid{S}: {paid_tasks} ({paid_pct}%)  {R}Errors{S}: {errors}")
+    else:
+        lines.append(f"  {GR}Nenhuma tarefa roteada hoje{S}")
+
+    # Provider breakdown
+    by_provider = costs.get("by_provider", {})
+    if by_provider and total > 0:
+        lines.append("")
+        lines.append(f"  {B}{GR}PER PROVIDER{S}")
+        lines.append(f"  {GR}{'─' * (W - 3)}{S}")
+        for provider, count in sorted(by_provider.items(), key=lambda x: -x[1]):
+            pct = int(count / total * 100)
+            bar = _braille_bar(pct / 100, width=8)
+            lines.append(f"  {provider:12s} {bar}  {count} tasks")
+
+    # ── Recommendation ──
+    lines.append("")
+    lines.append(f"  {B}{GR}{'─' * (W - 3)}{S}")
+    lines.append(f"  {B}{C}RECOMMENDATION{S}")
+    lines.append("")
+    lines.append(f"  {G}LOW{S}    ➔ {rec['low']['provider']:20s}  {GR}({G}FREE{GR}){S}" if rec["low"]["available"]
+                 else f"  {R}LOW    ➔ Unavailable{S}")
+    lines.append(f"  {Y}MEDIUM{S} ➔ {rec['medium']['provider']:20s}  {GR}({G}FREE{GR}){S}" if rec["medium"]["available"]
+                 else f"  {R}MEDIUM ➔ Unavailable{S}")
+    lines.append(f"  {C}HIGH{S}   ➔ {rec['high']['provider']:20s}  {GR}({rec['high']['cost']}){S}" if rec["high"]["available"]
+                 else f"  {R}HIGH   ➔ Unavailable{S}")
+
+    if rec["codex"]["best_account"]:
+        lines.append(f"  {G}CODEX{S}  ➔ {rec['codex']['best_account']}")
+    elif rec["codex"]["all_exhausted"]:
+        lines.append(f"  {R}CODEX  ➔ All accounts rate-limited{S}")
+
+    lines.append("")
+    lines.append(f"  {B}🎯 BEST VALUE:{S} {C}{rec['overall']['best_value']}{S}")
+    if rec["overall"].get("reason"):
+        lines.append(f"     {GR}{rec['overall']['reason']}{S}")
+    if rec["overall"].get("savings_today") and rec["overall"]["savings_today"] != "—":
+        lines.append(f"     {G}💰 Savings today: {rec['overall']['savings_today']}{S}")
+
+    lines.append("")
+    lines.append(f"  {GR}{'─' * (W - 3)}{S}")
+    lines.append(f"  {GR}switch-adapter route \"<task>\"   para rotear{S}")
+    lines.append(f"  {GR}switch-adapter dashboard        status completo{S}")
+    lines.append(f"  {GR}switch-adapter watch            live tracking{S}")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+def _render_simple(data: dict, rec: dict, ts: str) -> str:
+    """Plain text (for Telegram/cron) — with static Braille bars."""
+    lines = []
+    lines.append("◈ SWITCH ADAPTER")
+    lines.append(f"   {ts}")
+    lines.append("")
+
+    for name, key in [("Ollama", "ollama"), ("OllamaCloud", "ollama_cloud"),
+                      ("OpenRouter", "openrouter"),
+                      ("Nvidia", "nvidia"), ("Nous", "nous"), ("DeepSeek", "deepseek")]:
+        p = data[key]
+        status = p["status"]
+        elapsed = p.get("elapsed", 0)
+        icon = _icon(status)
+        bar = _health_braille(status, elapsed, width=9)
+        lines.append(f"  {icon} {name:12s} {bar}  {status.upper()} ({elapsed:.1f}s)")
+
+    # ── Finbot ──
+    fu = data.get("finbot_usage", {})
+    if fu.get("status") == "ok":
+        for key, prov in sorted(fu.get("providers", {}).items()):
+            t = prov.get("today", {})
+            tt = prov.get("total", {})
+            icon = _icon("online") if t.get("requests", 0) > 0 else _icon("no_model")
+            bar = _health_braille("online" if t.get("requests", 0) > 0 else "no_model", 0.5)
+            lines.append(f"  {icon} Finbot     {bar}  {prov.get('model','?')}")
+            if t.get("requests", 0) > 0:
+                lines.append(f"     Hoje: {t['total_tokens']} tokens  |  Total: {tt.get('total_tokens', 0)} tokens")
+            else:
+                lines.append(f"     Total tracked: {tt.get('total_tokens', 0)} tokens")
+        if not fu.get("providers"):
+            lines.append(f"  {_icon('no_model')} Finbot     {' ' * 18}  Waiting for requests")
+    elif fu.get("status") == "error":
+        lines.append(f"  {_icon('error')} Finbot     {' ' * 18}  {fu.get('detail','')[:50]}")
+
+    lines.append("")
+    for acc in data["codex"]:
+        active = "  ← ATIVA" if acc.get("active") else ""
+        ready = acc["status"] == "ready"
+        bar = _braille_bar(1.0, 8) if ready else _braille_bar(0.2, 8)
+        lines.append(f"  {_icon('ready' if ready else 'rate_limited')} Codex ({acc['name']}) {bar}{active}")
+
+    costs = data.get("costs", {})
+    total = costs.get("today_tasks", 0)
+    free_t = costs.get("today_free", 0)
+    paid_t = costs.get("today_paid", 0)
+    if total > 0:
+        pct = int(free_t / total * 100)
+        lines.append(f"  📊 Today: {total} tasks ({pct}% free)")
+        bar = _braille_bar(pct / 100, 8)
+        lines.append(f"     {bar}")
+
+    lines.append("")
+    lines.append(f"💡 BEST VALUE: {rec['overall']['best_value']}")
+    if rec["overall"].get("reason"):
+        lines.append(f"   {rec['overall']['reason']}")
+
+    return "\n".join(lines)
+
+
+def _render_html(data: dict, rec: dict, ts: str) -> str:
+    """HTML format for system messages."""
+    lines = ["<pre>"]
+    lines.append("◈ SWITCH ADAPTER — WELCOME")
+    lines.append(f"   {ts}")
+    lines.append("")
+
+    for name, key in [("Ollama", "ollama"), ("OllamaCloud", "ollama_cloud"),
+                      ("OpenRouter", "openrouter"),
+                      ("Nvidia", "nvidia"), ("Nous", "nous"), ("DeepSeek", "deepseek")]:
+        p = data[key]
+        lines.append(f"  {_icon(p['status'])} {name}: {p['status'].upper()}")
+
+    fu = data.get("finbot_usage", {})
+    if fu.get("status") == "ok":
+        for key, prov in sorted(fu.get("providers", {}).items()):
+            t = prov.get("today", {})
+            tt = prov.get("total", {})
+            icon = _icon("online") if t.get("requests", 0) > 0 else _icon("no_model")
+            lines.append(f"  {icon} Finbot ({prov.get('model','?')}): {tt.get('total_tokens', 0)} tokens tracked")
+            if t.get("requests", 0) > 0:
+                lines.append(f"     Today: {t['total_tokens']} tokens")
+    elif fu.get("status") == "error":
+        lines.append(f"  {"⚪"} Finbot: {fu['detail'][:50]}")
+
+    for acc in data["codex"]:
+        active = " << ATIVA" if acc.get("active") else ""
+        lines.append(f"  {_icon('ready' if acc['status'] == 'ready' else 'rate_limited')} Codex {acc['name']}{active}")
+
+    lines.append("")
+    lines.append(f"💡 BEST VALUE: {rec['overall']['best_value']}")
+    lines.append("</pre>")
+
+    return "\n".join(lines)
+
+
+# ── Terminal Animation ───────────────────────────────────────────────
+
+def _show_banner_animated():
+    """
+    Display the terminal banner with animated Braille bars.
+    Runs ~3 seconds of wave/pulse animation, then settles.
+    """
+    data = build_dashboard()
+    rec = recommend_best_provider(data)
+    ts = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+    # Capture the full static banner line count
+    static = _render_terminal(data, rec, ts)
+    total_lines = static.count("\n") + 1
+
+    # Animate
+    num_frames = 18
+    BAR_WIDTH_OVERRIDE = 9
+
+    for frame in range(num_frames + 1):
+        is_animated = frame < num_frames
+
+        # Build animated frame — override the bar rendering
+        out = _render_terminal_animated(data, rec, ts, frame, is_animated)
+        print(f"\033[{total_lines}A", end="", flush=True)
+        print(out, end="", flush=True)
+        if is_animated:
+            time.sleep(0.1)
+
+    print()
+
+
+def _render_terminal_animated(data: dict, rec: dict, ts: str,
+                              frame: int, animated: bool) -> str:
+    """Same as _render_terminal but with animated Braille bars."""
+    G = "\033[92m"
+    Y = "\033[93m"
+    R = "\033[91m"
+    C = "\033[36m"
+    B = "\033[1m"
+    GR = "\033[90m"
+    S = "\033[0m"
+
+    lines = []
+    W = 52
+
+    # ── Header box ──
+    lines.append("")
+    lines.append(f"  {B}{C}╔{'═' * (W - 2)}╗{S}")
+    subtitle = "BRAILLE ANIMATED" if animated else "BRAILLE STATUS"
+    lines.append(f"  {B}{C}║  ◈ SWITCH ADAPTER — {subtitle} ◈{' ' * (W - 44)}║{S}")
+    lines.append(f"  {B}{C}║{S}  {GR}{ts}{S}{' ' * (W - 26 - len(ts))}{B}{C}║{S}")
+    lines.append(f"  {B}{C}╚{'═' * (W - 2)}╝{S}")
+    lines.append("")
+
+    # ── Provider bars (animated Braille) ──
+    lines.append(f"  {B}{GR}PROVIDER BRAILLE BARS{S}")
+    lines.append(f"  {GR}{'─' * (W - 3)}{S}")
+
+    for name, key in [("Ollama", "ollama"), ("OllamaCloud", "ollama_cloud"),
+                      ("OpenRouter", "openrouter"),
+                      ("Nvidia", "nvidia"), ("DeepSeek", "deepseek")]:
+        p = data[key]
+        status = p["status"]
+        elapsed = p.get("elapsed", 0)
+        icon = _icon(status)
+        hbar = _health_braille(status, elapsed, animated=animated, frame=frame)
+        lat_str = f"{elapsed:.1f}s" if elapsed > 0 else "—"
+
+        if status == "online":
+            label = f"{G}{name:12s}{S}"
+        elif status in ("no_model", "no_key", "limited"):
+            label = f"{Y}{name:12s}{S}"
+        else:
+            label = f"{R}{name:12s}{S}"
+
+        if status == "online":
+            bar_colored = f"{G}{hbar}{S}"
+        elif status in ("no_model", "no_key", "limited"):
+            bar_colored = f"{Y}{hbar}{S}"
+        elif status == "offline":
+            bar_colored = f"{R}{hbar}{S}"
+        else:
+            bar_colored = f"{GR}{hbar}{S}"
+
+        lines.append(f"  {icon} {label} {bar_colored}  {GR}{lat_str}{S}")
+
+    # ── Finbot Token Consumption ──
+    fu = data.get("finbot_usage", {})
+    if fu.get("status") == "ok":
+        lines.append("")
+        lines.append(f"  {B}{GR}FINBOT TOKEN CONSUMPTION{S}")
+        lines.append(f"  {GR}{'─' * (W - 3)}{S}")
+        for key, prov in sorted(fu.get("providers", {}).items()):
+            t = prov.get("today", {})
+            tt = prov.get("total", {})
+            pd_color = G if t.get("requests", 0) == 0 else C
+            if t.get("requests", 0) > 0:
+                lines.append(f"  {pd_color}●{S} {B}{prov.get('provider','?').upper()}{S} ({GR}{prov.get('model','?')}{S})")
+                lines.append(f"     {B}Today:{S} {t['total_tokens']} tokens ({t['requests']} reqs, P:{t['prompt_tokens']} C:{t['completion_tokens']})")
+            else:
+                lines.append(f"  {GR}●{S} {B}{prov.get('provider','?').upper()}{S} ({GR}{prov.get('model','?')}{S})")
+            lines.append(f"     {GR}Total tracked:{S} {tt.get('total_tokens', 0)} tokens ({tt.get('requests', 0)} reqs)")
+        if not fu.get("providers"):
+            lines.append(f"  {GR}Aguardando requisicoes — bot reiniciado{S}")
+    elif fu.get("status") == "error" and fu.get("detail"):
+        lines.append(f"")
+        lines.append(f"  {R}●{S} FINBOT {GR}{fu['detail'][:60]}{S}")
+
+    # ── Codex accounts ──
+    if data.get("codex"):
+        lines.append("")
+        lines.append(f"  {B}{GR}CODEX ACCOUNTS{S}")
+        lines.append(f"  {GR}{'─' * (W - 3)}{S}")
+        for acc in data["codex"]:
+            if acc["status"] == "ready":
+                dot = f"{G}●{S}"
+                bar = f"{G}{_braille_bar(1.0, 10, animated, frame)}{S}"
+            elif "rate_limited" in acc["status"]:
+                dot = f"{R}●{S}"
+                bar = f"{R}{_braille_bar(0.2, 10, animated, frame)}{S}"
+            else:
+                dot = f"{Y}●{S}"
+                bar = f"{Y}{_braille_bar(0.5, 10, animated, frame)}{S}"
+            active_m = f"  {C}← active{S}" if acc.get("active") else ""
+            lines.append(f"  {dot} Codex ({acc['name']}) {bar}{active_m}")
+
+    # ── Usage bar ──
+    costs = data.get("costs", {})
+    total = costs.get("today_tasks", 0)
+    free_tasks = costs.get("today_free", 0)
+    paid_tasks = costs.get("today_paid", 0)
+    errors = costs.get("today_errors", 0)
+
+    lines.append("")
+    lines.append(f"  {B}{GR}TODAY'S USAGE{S}")
+    lines.append(f"  {GR}{'─' * (W - 3)}{S}")
+
+    if total > 0:
+        free_pct = int(free_tasks / total * 100)
+        paid_pct = int(paid_tasks / total * 100)
+        err_pct = int(errors / total * 100)
+
+        bar_w = 10
+        free_fill = int(free_pct * bar_w / 100)
+
+        usage_bar = f"{G}{_braille_bar(free_pct / 100, bar_w, animated, frame)}{S}"
+
+        lines.append(f"  {B}Total: {total} tarefas{S}")
+        lines.append(f"  {usage_bar}")
+        lines.append(f"  {G}Free{S}: {free_tasks} ({free_pct}%)  {Y}Paid{S}: {paid_tasks} ({paid_pct}%)  {R}Errors{S}: {errors}")
+    else:
+        lines.append(f"  {GR}Nenhuma tarefa roteada hoje{S}")
+
+    # Provider breakdown
+    by_provider = costs.get("by_provider", {})
+    if by_provider and total > 0:
+        lines.append("")
+        lines.append(f"  {B}{GR}PER PROVIDER{S}")
+        lines.append(f"  {GR}{'─' * (W - 3)}{S}")
+        for provider, count in sorted(by_provider.items(), key=lambda x: -x[1]):
+            pct = int(count / total * 100)
+            bar = _braille_bar(pct / 100, width=8, animated=animated, frame=frame)
+            lines.append(f"  {provider:12s} {bar}  {count} tasks")
+
+    # ── Recommendation ──
+    lines.append("")
+    lines.append(f"  {B}{GR}{'─' * (W - 3)}{S}")
+    lines.append(f"  {B}{C}RECOMMENDATION{S}")
+    lines.append("")
+    lines.append(f"  {G}LOW{S}    ➔ {rec['low']['provider']:20s}  {GR}({G}FREE{GR}){S}" if rec["low"]["available"]
+                 else f"  {R}LOW    ➔ Unavailable{S}")
+    lines.append(f"  {Y}MEDIUM{S} ➔ {rec['medium']['provider']:20s}  {GR}({G}FREE{GR}){S}" if rec["medium"]["available"]
+                 else f"  {R}MEDIUM ➔ Unavailable{S}")
+    lines.append(f"  {C}HIGH{S}   ➔ {rec['high']['provider']:20s}  {GR}({rec['high']['cost']}){S}" if rec["high"]["available"]
+                 else f"  {R}HIGH   ➔ Unavailable{S}")
+
+    if rec["codex"]["best_account"]:
+        lines.append(f"  {G}CODEX{S}  ➔ {rec['codex']['best_account']}")
+    elif rec["codex"]["all_exhausted"]:
+        lines.append(f"  {R}CODEX  ➔ All accounts rate-limited{S}")
+
+    lines.append("")
+    lines.append(f"  {B}🎯 BEST VALUE:{S} {C}{rec['overall']['best_value']}{S}")
+    if rec["overall"].get("reason"):
+        lines.append(f"     {GR}{rec['overall']['reason']}{S}")
+    if rec["overall"].get("savings_today") and rec["overall"]["savings_today"] != "—":
+        lines.append(f"     {G}💰 Savings today: {rec['overall']['savings_today']}{S}")
+
+    lines.append("")
+    lines.append(f"  {GR}{'─' * (W - 3)}{S}")
+    lines.append(f"  {GR}switch-adapter route \"<task>\"   para rotear{S}")
+    lines.append(f"  {GR}switch-adapter dashboard        status completo{S}")
+    lines.append(f"  {GR}switch-adapter watch            live tracking{S}")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+def main():
+    """CLI entry point."""
+    import argparse
+    parser = argparse.ArgumentParser(description="Switch Adapter Welcome Banner")
+    parser.add_argument("--simple", action="store_true", help="Plain text output")
+    parser.add_argument("--html", action="store_true", help="HTML output")
+    args = parser.parse_args()
+
+    if args.simple:
+        print(build_banner("simple"))
+    elif args.html:
+        print(build_banner("html"))
+    else:
+        # Terminal mode: show animated Braille banner
+        _show_banner_animated()
+
+
+if __name__ == "__main__":
+    main()

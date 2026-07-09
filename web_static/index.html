@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#58a6ff">
+  <meta name="description" content="Switch Adapter Dashboard — Multi-provider LLM routing with real-time monitoring, cost analytics, and intelligent routing.">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Switch Adapter">
+  <link rel="manifest" href="/static/manifest.json">
+  <link rel="icon" type="image/svg+xml" href="/static/assets/icon.svg">
+  <link rel="apple-touch-icon" href="/static/assets/icon-192.png">
+  
+  <title>Switch Adapter Dashboard</title>
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <!-- Design System CSS -->
+  <link rel="stylesheet" href="/static/css/design.css">
+  
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
+  
+  <!-- App Script -->
+  <script src="/static/js/app.js" defer></script>
+  
+  <!-- Inline critical styles for instant render -->
+  <style>
+    /* Prevent flash of unstyled content */
+    .js-loading { visibility: hidden; }
+    .js-loaded .js-loading { visibility: visible; }
+    
+    /* Skeleton loading */
+    .skeleton { background: linear-gradient(90deg, #161b22 25%, #21262d 50%, #161b22 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: 8px; }
+    @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+    
+    /* Tab styles */
+    [data-tab] { 
+      position: relative;
+      padding: var(--space-sm) var(--space-md);
+      border-bottom: 2px solid transparent;
+      transition: var(--transition-fast);
+    }
+    [data-tab]:hover { color: var(--color-accent); }
+    [data-tab].active { color: var(--color-accent); border-bottom-color: var(--color-accent); }
+    
+    [data-tab-panel] { display: none; }
+    [data-tab-panel].visible { display: block; animation: fadeIn var(--transition-base); }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+    
+    /* Hidden utility */
+    .hidden { display: none !important; }
+    
+    /* Responsive stats grid */
+    @media (max-width: 640px) {
+      .stats-row { grid-template-columns: repeat(2, 1fr) !important; }
+    }
+    @media (min-width: 641px) {
+      .stats-row { grid-template-columns: repeat(4, 1fr) !important; }
+    }
+    
+    /* Provider category stagger */
+    .provider-category { opacity: 0; animation: slideUp var(--transition-spring) forwards; }
+    .provider-category:nth-child(1) { animation-delay: 0ms; }
+    .provider-category:nth-child(2) { animation-delay: 50ms; }
+    .provider-category:nth-child(3) { animation-delay: 100ms; }
+    .provider-category:nth-child(4) { animation-delay: 150ms; }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    
+    /* Chart container */
+    #chartsGrid { display: none; }
+    #chartsGrid.visible { display: grid; }
+    
+    /* Details polyfill styling */
+    details summary { cursor: pointer; user-select: none; }
+    details summary::-webkit-details-marker { display: none; }
+    details summary::after { content: ''; display: inline-block; width: 8px; height: 8px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(45deg); transition: transform var(--transition-fast); margin-left: auto; }
+    details[open] summary::after { transform: rotate(-135deg); }
+    
+    /* Scrollbar for tables */
+    .overflow-x-auto { scrollbar-gutter: stable; }
+  </style>
+</head>
+<body class="js-loading bg-[var(--color-primary)] text-[var(--color-fg)] min-h-screen font-[var(--font-ui)]">
+  
+  <!-- ─── Header ─────────────────────────────────────────────────────────── -->
+  <header class="border-b border-[var(--color-border)] bg-[var(--color-bg-elevated)]/80 backdrop-blur-sm sticky top-0 z-[var(--z-sticky)]">
+    <div class="container px-4 py-4 flex items-center justify-between gap-4">
+      <!-- Logo & Title -->
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-[var(--color-accent)] to-[var(--color-purple)] flex items-center justify-center flex-shrink-0">
+          <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
+          </svg>
+        </div>
+        <div>
+          <h1 class="text-h4 font-bold tracking-tight">Switch Adapter</h1>
+          <p class="text-body-xs text-[var(--color-fg-muted)] mono">Multi-provider LLM Router</p>
+        </div>
+      </div>
+      
+      <!-- Tab Navigation -->
+      <nav class="hidden md:flex gap-1" role="tablist" aria-label="Dashboard sections">
+        <button data-tab="overview" class="active text-body-sm font-medium" role="tab" aria-selected="true">Visão Geral</button>
+        <button data-tab="analytics" class="text-body-sm font-medium" role="tab" aria-selected="false">Analytics</button>
+        <button data-tab="models" class="text-body-sm font-medium" role="tab" aria-selected="false">Modelos</button>
+      </nav>
+      
+      <!-- Status & Actions -->
+      <div class="flex items-center gap-3">
+        <!-- Last update -->
+        <div class="text-right hidden lg:block">
+          <p class="text-label-sm text-[var(--color-fg-muted)]">Última atualização</p>
+          <p id="lastUpdate" class="text-body-sm font-medium mono">--:--:--</p>
+        </div>
+        
+        <!-- WebSocket status -->
+        <span id="websocketStatus" class="hidden sm:inline-flex text-body-xs mono text-[var(--color-fg-muted)]">WebSocket: Conectando...</span>
+        
+        <!-- Refresh button -->
+        <button id="refreshBtn" class="btn btn-secondary flex items-center gap-2" aria-label="Atualizar dados">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+          <span class="hidden sm:inline">Atualizar</span>
+        </button>
+      </div>
+    </div>
+    
+    <!-- Mobile tab bar -->
+    <div class="md:hidden border-t border-[var(--color-border-muted)]">
+      <nav class="flex overflow-x-auto gap-1 px-4 py-2" role="tablist" aria-label="Dashboard sections">
+        <button data-tab="overview" class="active text-body-xs font-medium px-3 py-1.5 rounded-md whitespace-nowrap" role="tab" aria-selected="true">Visão Geral</button>
+        <button data-tab="analytics" class="text-body-xs font-medium px-3 py-1.5 rounded-md whitespace-nowrap" role="tab" aria-selected="false">Analytics</button>
+        <button data-tab="models" class="text-body-xs font-medium px-3 py-1.5 rounded-md whitespace-nowrap" role="tab" aria-selected="false">Modelos</button>
+      </nav>
+    </div>
+  </header>
+  
+  <!-- ─── Main Content ───────────────────────────────────────────────────── -->
+  <main class="container px-4 py-6">
+    
+    <!-- ─── Tab: Overview ─────────────────────────────────────────────────── -->
+    <section data-tab-panel="overview" class="visible" role="tabpanel" aria-labelledby="overview-tab">
+      
+      <!-- Route Suggestion Banner -->
+      <section id="routeSuggestion" class="hidden mb-6 p-4 rounded-xl bg-gradient-to-r from-[var(--color-accent-dim)]/20 to-[var(--color-purple)]/20 border border-[var(--color-accent)]/30" role="region" aria-label="Rota recomendada">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div class="flex items-center gap-3">
+            <div id="routePulse" class="w-2 h-2 rounded-full bg-[var(--color-green)] animate-pulse" aria-hidden="true"></div>
+            <span class="font-medium">Melhor rota para tarefas <span id="routeTier" class="font-mono text-[var(--color-accent)]"></span>:</span>
+            <span id="routeProvider" class="font-bold mono text-[var(--color-fg)]"></span>
+            <span class="text-[var(--color-fg-muted)] text-sm">(<span id="routeCost" class="font-mono"></span>)</span>
+          </div>
+          <span class="text-body-xs text-[var(--color-fg-muted)] mono">Atualiza a cada 10s via WebSocket</span>
+        </div>
+      </section>
+      
+      <!-- Stats Row -->
+      <section class="stats-row grid gap-4 mb-6" role="region" aria-label="Estatísticas rápidas">
+        <article class="card-stat">
+          <p class="text-label-md text-[var(--color-fg-muted)]">Chamadas Hoje</p>
+          <p id="statTasks" class="text-mono-xl text-[var(--color-fg)] mt-1">--</p>
+        </article>
+        <article class="card-stat">
+          <p class="text-label-md text-[var(--color-fg-muted)]">Tokens Grátis</p>
+          <p id="statFree" class="text-mono-xl text-[var(--color-green)] mt-1">--</p>
+        </article>
+        <article class="card-stat">
+          <p class="text-label-md text-[var(--color-fg-muted)]">Tokens Pagos</p>
+          <p id="statPaid" class="text-mono-xl text-[var(--color-yellow)] mt-1">--</p>
+        </article>
+        <article class="card-stat">
+          <p class="text-label-md text-[var(--color-fg-muted)]">Custo Estimado</p>
+          <p id="statCost" class="text-mono-xl text-[var(--color-red)] mt-1">$0.0000</p>
+        </article>
+      </section>
+      
+      <!-- Providers Grid -->
+      <section role="region" aria-label="Provedores disponíveis">
+        <header class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+          <h2 class="text-h3 flex items-center gap-2">
+            <svg class="w-6 h-6 text-[var(--color-accent)]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
+            Provedores
+          </h2>
+          <div class="flex flex-wrap items-center gap-2 text-body-xs text-[var(--color-fg-muted)]">
+            <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-[var(--color-green)]"></span>Online</span>
+            <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-[var(--color-yellow)]"></span>Limitado</span>
+            <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-[var(--color-red)]"></span>Offline</span>
+            <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-[var(--color-fg-muted)]"></span>Sem key</span>
+          </div>
+        </header>
+        <div class="providers-grid skeleton" id="providersGrid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--space-md);" role="list" aria-label="Lista de provedores">
+          <!-- Populated by JS -->
+        </div>
+      </section>
+      
+      <!-- Extra Sections (Finbot, Codex, Tailscale) -->
+      <section id="extraSections" class="grid gap-6 mt-8" style="display: none; grid-template-columns: 1fr;" role="region" aria-label="Serviços extras">
+        @media (min-width: 1024px) {
+          #extraSections { grid-template-columns: 1fr 1fr; }
+        }
+        <!-- Populated by JS -->
+      </section>
+      
+    </section>
+    
+    <!-- ─── Tab: Analytics ───────────────────────────────────────────────── -->
+    <section data-tab-panel="analytics" class="hidden" role="tabpanel" aria-labelledby="analytics-tab">
+      
+      <!-- Charts Section -->
+      <section id="chartsSection" class="mb-6">
+        <header class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+          <h2 class="text-h3">Análise Visual</h2>
+          <div class="flex flex-wrap gap-2">
+            <button class="btn btn-ghost text-body-xs" data-chart="cost">Custo</button>
+            <button class="btn btn-ghost text-body-xs" data-chart="latency">Latência</button>
+            <button class="btn btn-ghost text-body-xs" data-chart="calls">Chamadas</button>
+          </div>
+        </header>
+        <div class="grid gap-6" id="chartsGrid" style="display: none; grid-template-columns: 1fr;">
+          @media (min-width: 1024px) {
+            #chartsGrid { grid-template-columns: 1fr 1fr; }
+          }
+          <div style="height: 300px;"><canvas id="chartCostTrend"></canvas></div>
+          <div style="height: 300px;"><canvas id="chartProviderComparison"></canvas></div>
+          <div style="height: 300px;"><canvas id="chartLatency"></canvas></div>
+        </div>
+        <p class="text-body-sm text-[var(--color-fg-muted)] text-center py-8" id="chartsLoading">Carregando gráficos...</p>
+      </section>
+      
+      <!-- Cost Summary Panel -->
+      <section id="costsPanel" class="mb-6" role="region" aria-label="Resumo de custos">
+        <div class="card-section text-center py-12">
+          <div class="skeleton h-8 w-1/4 mx-auto mb-4"></div>
+          <div class="skeleton h-4 w-1/2 mx-auto"></div>
+        </div>
+      </section>
+      
+      <!-- Tokens by Model Panel -->
+      <section id="tokensPanel" class="mb-6" role="region" aria-label="Tokens por modelo">
+        <div class="card-section text-center py-12">
+          <div class="skeleton h-8 w-1/4 mx-auto mb-4"></div>
+          <div class="skeleton h-4 w-1/2 mx-auto"></div>
+        </div>
+      </section>
+      
+      <!-- Benchmarks Panel -->
+      <section id="benchmarksPanel" class="mb-6" role="region" aria-label="Benchmarks de latência">
+        <div class="card-section text-center py-12">
+          <div class="skeleton h-8 w-1/4 mx-auto mb-4"></div>
+          <div class="skeleton h-4 w-1/2 mx-auto"></div>
+        </div>
+      </section>
+      
+    </section>
+    
+    <!-- ─── Tab: Models ──────────────────────────────────────────────────── -->
+    <section data-tab-panel="models" class="hidden" role="tabpanel" aria-labelledby="models-tab">
+      <section class="mb-6">
+        <header class="flex items-center justify-between mb-4">
+          <h2 class="text-h3">Catálogo de Modelos</h2>
+          <div class="flex gap-2">
+            <select class="select" id="modelFilter" aria-label="Filtrar por categoria">
+              <option value="all">Todos</option>
+              <option value="Free Local">Free Local</option>
+              <option value="Free Cloud/API">Free Cloud/API</option>
+              <option value="Subscription">Subscription</option>
+              <option value="Paid APIs">Paid APIs</option>
+            </select>
+            <input type="search" class="input w-48" placeholder="Buscar modelo..." id="modelSearch" aria-label="Buscar modelo">
+          </div>
+        </header>
+        <div id="modelsGrid" class="providers-grid skeleton" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--space-md);">
+          <!-- Populated by JS -->
+        </div>
+      </section>
+    </section>
+    
+  </main>
+  
+  <!-- ─── Footer ─────────────────────────────────────────────────────────── -->
+  <footer class="border-t border-[var(--color-border)] py-4 mt-10">
+    <div class="container px-4 flex flex-col sm:flex-row items-center justify-between gap-2 text-body-xs text-[var(--color-fg-muted)]">
+      <span>Switch Adapter Dashboard • <a href="https://github.com/" class="text-[var(--color-accent)] hover:underline" target="_blank" rel="noopener">GitHub</a></span>
+      <span class="mono" id="websocketStatusFooter">WebSocket: Conectando...</span>
+    </div>
+  </footer>
+  
+  <!-- ─── Service Worker Registration ────────────────────────────────────── -->
+  <script>
+    // Enable JS styles immediately
+    document.documentElement.classList.remove('js-loading');
+    document.documentElement.classList.add('js-loaded');
+    
+    // Register Service Worker
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/static/sw.js').catch(console.error);
+      });
+    }
+  </script>
+</body>
+</html>
